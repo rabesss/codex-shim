@@ -13,8 +13,13 @@ expects.
 
 > Tested on Codex Desktop **0.133.0-alpha.1** for macOS arm64. The shim server
 > and routing layer are plain Python/aiohttp and work on Windows, macOS, Linux,
-> WSL, and Git Bash. The only macOS-specific piece is the optional Desktop picker
-> ASAR patch, needed when Codex hides custom catalog entries.
+> WSL, and Git Bash. The optional Desktop picker ASAR patch (macOS app bundle or
+> Linux overlay) is only needed when Codex hides custom catalog entries.
+
+**Linux desktop provider bridge (fork):** maintained on
+[`rabesss/codex-shim`](https://github.com/rabesss/codex-shim), branch
+`linux/desktop-provider-bridge`. User guide: [`docs/linux-desktop.md`](docs/linux-desktop.md).
+Maintainers: [`docs/FORK.md`](docs/FORK.md).
 
 ---
 
@@ -373,52 +378,6 @@ Useful model fields:
 | `truncation_limit` | Explicit Desktop truncation policy token limit. |
 | `no_image_support` | When true, catalog advertises text-only input. |
 | `extra_headers` | Optional upstream headers merged into requests. |
-
----
-
-## Linux desktop provider bridge (fork)
-
-The [`rabesss/codex-shim`](https://github.com/rabesss/codex-shim) fork adds a
-maintained **multi-provider catalog** for Codex Desktop on Linux. It is a
-Codex-specific bridge, not a general-purpose gateway:
-
-```text
-Codex Desktop/CLI -> codex-shim :8765 -> selected provider endpoint
-```
-
-[CLIProxyAPI](https://github.com/router-for-me/CLIProxyAPI) can stay in use for
-Cursor and other tools. This fork calls CPA only for OAuth-backed routes (for
-example `grok-*` slugs). Direct API-key providers use their own `base_url` and
-credential names resolved at runtime.
-
-Generate the bundled provider-prefixed matrix:
-
-```bash
-codex-shim desktop write-models --output ~/.codex-shim/models.json
-codex-shim generate
-systemctl --user restart codex-shim.service   # optional user unit
-```
-
-Example slugs:
-
-```text
-opencode-go-deepseek-v4-pro
-zai-glm-5-1
-xiaomi-mimo-v2-5-pro
-commandcode-deepseek-v4-pro
-grok-composer-2-5-fast
-```
-
-The matrix stores **credential names** (for example `DROID_BYOK_OPENCODE_GO_API_KEY`,
-`XIAOMI_MIMO_TOKEN_PLAN_API_KEY`, `CLIPROXY_INTERNAL_API_KEY`), not secret values.
-Load them via systemd `LoadCredentialEncrypted=`, environment variables, or the
-other resolution paths in the table above.
-
-Capability flags in the bundled matrix are conservative: text-only where upstream
-rejects images, vision enabled only after live smokes, and per-model context or
-compaction limits instead of a single global default.
-
-Maintainer notes: [`docs/FORK.md`](docs/FORK.md).
 
 ### Ollama / local OpenAI-compatible chat endpoints
 
@@ -909,7 +868,7 @@ codex-shim app [path]        launch Codex Desktop through managed shim config
 codex-shim patch-app         patch Codex Desktop picker allowlist
 codex-shim restore-app       restore Codex Desktop app.asar from patch backup
 codex-shim desktop write-models
-                             write bundled provider-prefixed model matrix
+                             bundled model matrix (fork; see docs/FORK.md)
 
 codex-app [path]             shortcut for `codex-shim app`
 codex-model [list|<slug>]    shortcut for `codex-shim model …`
@@ -921,10 +880,11 @@ Global flags:
 - `--port <port>`: used by daemon/provider flows.
 
 `patch-app` and `restore-app` do not use `--settings`. On macOS they target
-`/Applications/Codex.app` or the user-local app copy. On this Linux workstation
-they patch the overlay under
-`~/.local/share/codex-desktop-linux-overlay/patched-app`, copied from
-`/opt/codex-desktop`. Other platforms exit with a clear error.
+`/Applications/Codex.app` or `~/Applications/Codex.app`. On Linux they copy
+`/opt/codex-desktop` into
+`~/.local/share/codex-desktop-linux-overlay/patched-app` (override with
+`CODEX_DESKTOP_LINUX_SOURCE_DIR` / `CODEX_DESKTOP_LINUX_PATCHED_DIR`). Windows
+and other platforms exit with a clear error.
 
 ---
 

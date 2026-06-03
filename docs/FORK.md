@@ -7,7 +7,7 @@ Maintainer notes for **[rabesss/codex-shim](https://github.com/rabesss/codex-shi
 
 | Audience | Document | Role |
 |----------|----------|------|
-| Public / first visit | [README](../README.md) | Minimal project face: upstream install, core commands, short fork pointer |
+| Public / first visit | [README](../README.md) | Fork identity and delta vs upstream; not a copy of the upstream mega-README |
 | Linux bridge users | [`linux-desktop.md`](linux-desktop.md) | Quick start, routing, `patch-app`, credentials, capability policy |
 | Fork maintainers | This file | Delta vs upstream, rebase workflow, tests, publishing |
 
@@ -37,7 +37,7 @@ git diff origin/main...HEAD -- ':!*.md' ':!docs/*'
 | `tests/test_settings_catalog.py` | Desktop matrix, credentials, catalog labels, Linux bundle patch tests. |
 | `tests/test_server.py` | Minor server test adjustment. |
 
-**Documentation on the fork branch:** `README.md` (upstream-aligned + short fork pointer), `docs/linux-desktop.md`, `docs/FORK.md`.
+**Documentation on the fork branch:** `README.md` (fork identity / delta), `docs/linux-desktop.md`, `docs/FORK.md`.
 
 ## Fork-only behavior (summary)
 
@@ -87,7 +87,7 @@ End-user deploy steps: [`linux-desktop.md`](linux-desktop.md).
 1. `git fetch origin` and rebase (or merge) the fork branch onto `origin/main`.
 2. Full `pytest`; fork regressions concentrate in `tests/test_settings_catalog.py`.
 3. Re-run `patch-app` smoke after Codex Desktop version bumps (needle strings in bundled JS change).
-4. Keep README fork material minimal; new user-facing fork prose belongs in `docs/linux-desktop.md`, not README or this file.
+4. Keep README focused on fork identity and delta; new operational user prose belongs in `docs/linux-desktop.md`, not README or this file.
 
 ## Publishing
 

@@ -11,6 +11,7 @@ import time
 import hashlib
 import json
 import plistlib
+import shutil
 import struct
 from urllib.request import urlopen
 
@@ -37,6 +38,7 @@ from .settings import (
     usable_byok_models,
     byok_model_has_credentials,
 )
+from .desktop_models import write_desktop_models
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -54,19 +56,45 @@ WINDOWS_PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
 WINDOWS_STILL_ACTIVE = 259
 PREVIOUS_TOP_LEVEL_PREFIX = "# codex-shim previous-top-level = "
 MANAGED_TOP_LEVEL_KEYS = {"model", "model_provider", "model_catalog_json"}
+HEALTH_CHECK_TIMEOUT_SECONDS = 3.0
 APP_ASAR_BACKUP_NAME = "app.asar.before-codex-shim-model-picker-patch"
 INFO_PLIST_BACKUP_NAME = "Info.plist.before-codex-shim-model-picker-patch"
 SYSTEM_CODEX_APP = Path("/Applications/Codex.app")
 USER_CODEX_APP = Path.home() / "Applications" / "Codex.app"
-MODEL_PICKER_NEEDLE = "let u=c.useHiddenModels&&o!==`amazonBedrock`,d;"
-MODEL_PICKER_REPLACEMENT = "let u=!1,d;"
-SIDEBAR_RECENT_THREADS_NEEDLE = (
-    "listRecentThreads({cursor:e,limit:t}){return this.params.requestClient.sendRequest(`thread/list`,"
-    "{limit:t,cursor:e,sortKey:this.recentConversationSortKey,modelProviders:null,archived:!1,sourceKinds:ke})}"
-)
-SIDEBAR_RECENT_THREADS_REPLACEMENT = (
-    "listRecentThreads({cursor:e,limit:t}){return this.params.requestClient.sendRequest(`thread/list`,"
-    "{limit:t,cursor:e,sortKey:this.recentConversationSortKey,modelProviders:[],archived:!1,sourceKinds:ke})}"
+LINUX_SYSTEM_CODEX_APP = Path("/opt/codex-desktop")
+LINUX_USER_CODEX_APP = Path.home() / ".local" / "share" / "codex-desktop-linux-overlay" / "patched-app"
+LINUX_SOURCE_HASH_STAMP = ".codex-shim-source-app-asar-sha256"
+MODEL_PICKER_PATCH_VARIANTS = [
+    (
+        ["models-and-reasoning-efforts-*.js", "model-queries-*.js", "*.js"],
+        "let a=[],o=null,s=i&&e!==`amazonBedrock`;",
+        "let a=[],o=null,s=!1;",
+    ),
+    (
+        ["model-queries-*.js", "*.js"],
+        "let u=c.useHiddenModels&&o!==`amazonBedrock`,d;",
+        "let u=!1,d;",
+    ),
+]
+SIDEBAR_RECENT_THREADS_PATCH_VARIANTS = [
+    (
+        ["app-server-manager-signals-*.js", "*.js"],
+        "listRecentThreads({cursor:e,limit:t}){return this.params.requestClient.sendRequest(`thread/list`,"
+        "{limit:t,cursor:e,sortKey:this.recentConversationSortKey,modelProviders:null,archived:!1,sourceKinds:he})}",
+        "listRecentThreads({cursor:e,limit:t}){return this.params.requestClient.sendRequest(`thread/list`,"
+        "{limit:t,cursor:e,sortKey:this.recentConversationSortKey,modelProviders:[],archived:!1,sourceKinds:he})}",
+    ),
+    (
+        ["app-server-manager-signals-*.js", "*.js"],
+        "listRecentThreads({cursor:e,limit:t}){return this.params.requestClient.sendRequest(`thread/list`,"
+        "{limit:t,cursor:e,sortKey:this.recentConversationSortKey,modelProviders:null,archived:!1,sourceKinds:ke})}",
+        "listRecentThreads({cursor:e,limit:t}){return this.params.requestClient.sendRequest(`thread/list`,"
+        "{limit:t,cursor:e,sortKey:this.recentConversationSortKey,modelProviders:[],archived:!1,sourceKinds:ke})}",
+    ),
+]
+MODEL_PICKER_REPLACEMENTS = tuple(replacement for _, _, replacement in MODEL_PICKER_PATCH_VARIANTS)
+SIDEBAR_RECENT_THREADS_REPLACEMENTS = tuple(
+    replacement for _, _, replacement in SIDEBAR_RECENT_THREADS_PATCH_VARIANTS
 )
 
 
@@ -98,6 +126,20 @@ def main(argv: list[str] | None = None) -> int:
     app_parser = sub.add_parser("app", help="Launch Codex Desktop with opt-in shim config overrides.")
     app_parser.add_argument("-m", "--model", dest="model_slug")
     app_parser.add_argument("path", nargs="?", default=".")
+
+    desktop_parser = sub.add_parser("desktop", help="Linux Codex Desktop model matrix helpers.")
+    desktop_sub = desktop_parser.add_subparsers(dest="desktop_command", required=True)
+    desktop_write = desktop_sub.add_parser("write-models", help="Write provider-prefixed models.json for Desktop.")
+    desktop_write.add_argument("--output", type=Path, default=DEFAULT_SETTINGS)
+    desktop_write.add_argument("--no-commandcode", action="store_true", help="Omit direct CommandCode adapter routes.")
+    desktop_write.add_argument("--no-cpa-oauth", action="store_true", help="Omit CPA-backed OAuth-only routes such as Grok CLI.")
+    # Deprecated alias: `codex-shim ravish write-models` (hidden from help)
+    ravish_parser = sub.add_parser("ravish", help=argparse.SUPPRESS)
+    ravish_sub = ravish_parser.add_subparsers(dest="ravish_command", required=True)
+    ravish_write = ravish_sub.add_parser("write-models", help=argparse.SUPPRESS)
+    ravish_write.add_argument("--output", type=Path, default=DEFAULT_SETTINGS)
+    ravish_write.add_argument("--no-commandcode", action="store_true")
+    ravish_write.add_argument("--no-cpa-oauth", action="store_true")
 
     args = parser.parse_args(argv)
     if args.command == "generate":
@@ -145,6 +187,16 @@ def main(argv: list[str] | None = None) -> int:
         install_codex_config(args.settings, args.port, args.model_slug)
         exec_codex_app(args.settings, args.port, args.path)
         return 0
+    if args.command in {"desktop", "ravish"}:
+        write_cmd = getattr(args, "desktop_command", None) or getattr(args, "ravish_command", None)
+        if write_cmd == "write-models":
+            output = write_desktop_models(
+                args.output,
+                include_commandcode=not args.no_commandcode,
+                include_cpa_oauth=not args.no_cpa_oauth,
+            )
+            print(f"Wrote desktop model matrix to {output}")
+            return 0
     return 2
 
 
@@ -374,9 +426,15 @@ def _quit_codex_app() -> None:
 
 
 def patch_codex_app() -> int:
-    if sys.platform != "darwin":
-        print("patch-app is macOS-only; Windows MSIX Codex Desktop cannot be patched with this ASAR helper.", file=sys.stderr)
-        return 1
+    if sys.platform == "darwin":
+        return _patch_macos_codex_app()
+    if sys.platform.startswith("linux"):
+        return _patch_linux_codex_app()
+    print("patch-app supports macOS app bundles and this local Linux Codex Desktop overlay only.", file=sys.stderr)
+    return 1
+
+
+def _patch_macos_codex_app() -> int:
     codex_app = _codex_app_bundle_for_patch()
     app_asar = codex_app / "Contents/Resources/app.asar"
     info_plist = codex_app / "Contents/Info.plist"
@@ -427,8 +485,10 @@ def patch_codex_app() -> int:
 
 
 def restore_codex_app_bundle() -> int:
+    if sys.platform.startswith("linux"):
+        return _restore_linux_codex_app_bundle()
     if sys.platform != "darwin":
-        print("restore-app is macOS-only; Windows MSIX Codex Desktop cannot be restored with this ASAR helper.", file=sys.stderr)
+        print("restore-app supports macOS app bundles and this local Linux Codex Desktop overlay only.", file=sys.stderr)
         return 1
     codex_app = patched_codex_app_bundle() or _codex_app_bundle_for_patch()
     app_asar = codex_app / "Contents/Resources/app.asar"
@@ -447,6 +507,80 @@ def restore_codex_app_bundle() -> int:
         _update_app_asar_integrity(app_asar, info_plist)
     _resign_codex_app(codex_app)
     print(f"Restored {app_asar} from {backup}.")
+    return 0
+
+
+def _patch_linux_codex_app() -> int:
+    source_app = Path(os.environ.get("CODEX_DESKTOP_LINUX_SOURCE_DIR", str(LINUX_SYSTEM_CODEX_APP)))
+    target_app = Path(os.environ.get("CODEX_DESKTOP_LINUX_PATCHED_DIR", str(LINUX_USER_CODEX_APP)))
+    source_asar = source_app / "resources" / "app.asar"
+    target_asar = target_app / "resources" / "app.asar"
+    if not source_asar.exists():
+        print(f"Codex Desktop Linux app.asar not found at {source_asar}.", file=sys.stderr)
+        return 1
+    if not _has_command("npx"):
+        print("npx is required to patch the Electron asar bundle.", file=sys.stderr)
+        return 1
+
+    source_hash = _app_asar_hash(source_asar)
+    stamp = target_app / LINUX_SOURCE_HASH_STAMP
+    stamp_hash = stamp.read_text().strip() if stamp.exists() else ""
+    if not target_asar.exists() or stamp_hash != source_hash:
+        if target_app.exists():
+            shutil.rmtree(target_app)
+        target_app.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copytree(source_app, target_app, symlinks=True)
+        stamp.write_text(source_hash + "\n")
+        print(f"Copied Codex Desktop Linux app from {source_app} to {target_app}.")
+
+    RUNTIME_DIR.mkdir(parents=True, exist_ok=True)
+    backup = RUNTIME_DIR / "linux-app.asar.before-codex-shim-model-picker-patch"
+    if not backup.exists():
+        backup.write_bytes(target_asar.read_bytes())
+        print(f"Backed up original Linux app.asar to {backup}.")
+    versioned_backup = RUNTIME_DIR / f"linux-app.asar.before-codex-shim-model-picker-patch.{_app_asar_hash(target_asar)[:12]}"
+    if not versioned_backup.exists():
+        versioned_backup.write_bytes(target_asar.read_bytes())
+        print(f"Backed up current Linux app.asar to {versioned_backup}.")
+
+    workdir = RUNTIME_DIR / "app-asar-work-linux"
+    if workdir.exists():
+        shutil.rmtree(workdir)
+    workdir.mkdir(parents=True)
+
+    subprocess.run(["npx", "--yes", "asar", "extract", str(target_asar), str(workdir)], check=True)
+    changed = _patch_codex_desktop_bundles(workdir)
+    if changed is None:
+        return 1
+    if changed:
+        subprocess.run(["npx", "--yes", "asar", "pack", str(workdir), str(target_asar)], check=True)
+        print(f"Packed patched Linux app.asar at {target_asar}.")
+
+    content_dir = target_app / "content"
+    if content_dir.exists():
+        content_changed = _patch_codex_desktop_bundles(content_dir)
+        if content_changed is None:
+            return 1
+        if content_changed:
+            print(f"Patched Linux webview assets under {content_dir}.")
+        else:
+            print("Linux webview asset patches are already applied.")
+    print(f"Patched Linux Codex Desktop copy: {target_app}")
+    return 0
+
+
+def _restore_linux_codex_app_bundle() -> int:
+    target_app = Path(os.environ.get("CODEX_DESKTOP_LINUX_PATCHED_DIR", str(LINUX_USER_CODEX_APP)))
+    target_asar = target_app / "resources" / "app.asar"
+    backup = RUNTIME_DIR / "linux-app.asar.before-codex-shim-model-picker-patch"
+    if not backup.exists():
+        print(f"No Linux app.asar backup found at {backup}.")
+        return 0
+    if not target_asar.exists():
+        print(f"No patched Linux app.asar found at {target_asar}.")
+        return 0
+    target_asar.write_bytes(backup.read_bytes())
+    print(f"Restored {target_asar} from {backup}.")
     return 0
 
 
@@ -486,26 +620,17 @@ def _patch_codex_desktop_bundles(workdir: Path) -> bool | None:
     patches = [
         (
             "model picker allowlist filter",
-            ["model-queries-*.js", "*.js"],
-            MODEL_PICKER_NEEDLE,
-            MODEL_PICKER_REPLACEMENT,
+            MODEL_PICKER_PATCH_VARIANTS,
         ),
         (
             "shim-mode sidebar provider filter",
-            ["app-server-manager-signals-*.js", "*.js"],
-            SIDEBAR_RECENT_THREADS_NEEDLE,
-            SIDEBAR_RECENT_THREADS_REPLACEMENT,
+            SIDEBAR_RECENT_THREADS_PATCH_VARIANTS,
         ),
     ]
     changed = False
-    for label, globs, needle, replacement in patches:
-        bundle_file = _find_js_bundle(workdir, globs, needle, replacement)
-        if bundle_file is None:
-            print(f"Could not find the expected {label} in Codex Desktop.", file=sys.stderr)
-            return None
-        result = _replace_once(bundle_file, needle, replacement)
+    for label, variants in patches:
+        result = _patch_first_matching_variant(workdir, label, variants)
         if result is None:
-            print(f"Could not patch the expected {label} in Codex Desktop.", file=sys.stderr)
             return None
         if result:
             changed = True
@@ -513,6 +638,24 @@ def _patch_codex_desktop_bundles(workdir: Path) -> bool | None:
         else:
             print(f"Codex Desktop {label} patch is already applied.")
     return changed
+
+
+def _patch_first_matching_variant(
+    workdir: Path,
+    label: str,
+    variants: list[tuple[list[str], str, str]],
+) -> bool | None:
+    for globs, needle, replacement in variants:
+        bundle_file = _find_js_bundle(workdir, globs, needle, replacement)
+        if bundle_file is None:
+            continue
+        result = _replace_once(bundle_file, needle, replacement)
+        if result is None:
+            print(f"Could not patch the expected {label} in Codex Desktop.", file=sys.stderr)
+            return None
+        return result
+    print(f"Could not find the expected {label} in Codex Desktop.", file=sys.stderr)
+    return None
 
 
 def _find_js_bundle(workdir: Path, globs: list[str], needle: str, replacement: str) -> Path | None:
@@ -588,7 +731,9 @@ def _app_asar_is_patched(app_asar: Path) -> bool:
         text = app_asar.read_bytes().decode("utf-8", errors="ignore")
     except OSError:
         return False
-    return MODEL_PICKER_REPLACEMENT in text and SIDEBAR_RECENT_THREADS_REPLACEMENT in text
+    return any(replacement in text for replacement in MODEL_PICKER_REPLACEMENTS) and any(
+        replacement in text for replacement in SIDEBAR_RECENT_THREADS_REPLACEMENTS
+    )
 
 
 def _resign_codex_app(codex_app: Path = SYSTEM_CODEX_APP) -> None:
@@ -891,7 +1036,10 @@ def _healthy(port: int) -> bool:
 
 def _health(port: int) -> dict | None:
     try:
-        with urlopen(f"http://{DEFAULT_HOST}:{port}/health", timeout=0.5) as response:
+        with urlopen(
+            f"http://{DEFAULT_HOST}:{port}/health",
+            timeout=HEALTH_CHECK_TIMEOUT_SECONDS,
+        ) as response:
             if response.status != 200:
                 return None
             return json.loads(response.read().decode("utf-8"))

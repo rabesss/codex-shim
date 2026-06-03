@@ -11,6 +11,7 @@ from codex_shim.server import (
     ResponsesStreamState,
     ShimServer,
     _current_managed_model,
+    _join_url,
     _picker_html,
     _rewrite_response_model,
     _sanitize_chatgpt_passthrough_body,
@@ -121,6 +122,15 @@ def test_image_generation_detection_is_conservative():
             ]
         }
     ) is True
+
+
+def test_join_url_handles_versioned_provider_bases():
+    assert _join_url("https://api.openai.com/v1", "/chat/completions") == "https://api.openai.com/v1/chat/completions"
+    assert _join_url("https://api.z.ai/api/coding/paas/v4", "/chat/completions") == (
+        "https://api.z.ai/api/coding/paas/v4/chat/completions"
+    )
+    assert _join_url("https://example.test/api/coding/v3", "/messages") == "https://example.test/api/coding/v3/messages"
+    assert _join_url("https://example.test", "/chat/completions") == "https://example.test/v1/chat/completions"
 
 
 async def test_image_generation_routes_to_chatgpt_passthrough_and_rewrites_model(monkeypatch, tmp_path, auth_present):

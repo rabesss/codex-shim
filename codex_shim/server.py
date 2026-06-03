@@ -717,7 +717,7 @@ class ShimServer:
             raise web.HTTPUnauthorized(
                 text=(
                     f"Model {route.slug} has no API key. "
-                    "Set CURSOR_API_KEY or create ~/.codex-shim/cursor-api-key."
+                    "Set api_key, api_key_env, api_key_file, or api_key_credential for this settings row."
                 )
             )
         return route
@@ -1388,7 +1388,7 @@ def _decode_thinking_payload(encoded: str) -> dict[str, Any] | None:
 
 def _join_url(base_url: str, endpoint: str) -> str:
     base = base_url.rstrip("/")
-    if base.endswith("/v1"):
+    if re.search(r"/v\d+(?:[/?#].*)?$", base):
         return base + endpoint
     if endpoint == "/messages":
         return base + "/v1/messages"

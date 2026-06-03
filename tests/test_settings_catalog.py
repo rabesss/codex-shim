@@ -9,6 +9,7 @@ import pytest
 
 from codex_shim import cli
 from codex_shim.catalog import catalog_entry, write_catalog
+from codex_shim.desktop_models import desktop_models_payload, write_desktop_models
 from codex_shim.settings import ModelSettings, chatgpt_passthrough_available, FALLBACK_CHATGPT_PASSTHROUGH_SLUGS
 
 
@@ -92,6 +93,89 @@ def test_catalog_preserves_context_and_visibility():
     assert entry["visibility"] == "list"
     assert entry["context_window"] == 200000
     assert "free" in entry["available_in_plans"]
+
+
+def test_catalog_uses_per_model_compaction_limits(tmp_path):
+    settings = tmp_path / "settings.json"
+    settings.write_text(
+        json.dumps(
+            {
+                "models": [
+                    {
+                        "model": "large-model",
+                        "provider": "openai",
+                        "base_url": "http://x/v1",
+                        "api_key": "key",
+                        "max_context_limit": 1000000,
+                        "auto_compact_token_limit": 700000,
+                        "truncation_limit": 120000,
+                    }
+                ]
+            }
+        )
+    )
+    [model] = ModelSettings(settings).load()
+    entry = catalog_entry(model)
+    assert entry["context_window"] == 1000000
+    assert entry["auto_compact_token_limit"] == 700000
+    assert entry["truncation_policy"] == {"mode": "tokens", "limit": 120000}
+
+
+def test_api_key_env_and_systemd_credential_resolution(monkeypatch, tmp_path):
+    credential_dir = tmp_path / "credentials"
+    credential_dir.mkdir()
+    (credential_dir / "DIRECT_KEY").write_text("from-credential\n")
+    monkeypatch.setenv("CREDENTIALS_DIRECTORY", str(credential_dir))
+    monkeypatch.setenv("ENV_KEY", "from-env")
+
+    settings = tmp_path / "settings.json"
+    settings.write_text(
+        json.dumps(
+            {
+                "models": [
+                    {
+                        "slug": "env-model",
+                        "model": "env-model",
+                        "provider": "openai",
+                        "base_url": "http://x/v1",
+                        "api_key_env": "ENV_KEY",
+                    },
+                    {
+                        "slug": "credential-model",
+                        "model": "credential-model",
+                        "provider": "openai",
+                        "base_url": "http://x/v1",
+                        "api_key_credential": "DIRECT_KEY",
+                    },
+                ]
+            }
+        )
+    )
+
+    env_model, credential_model = ModelSettings(settings).load()
+    assert env_model.api_key == "from-env"
+    assert credential_model.api_key == "from-credential"
+
+
+def test_desktop_model_matrix_uses_credentials_and_provider_prefixes(tmp_path):
+    payload = desktop_models_payload()
+    rows = {row["slug"]: row for row in payload["models"]}
+
+    assert "opencode-go-deepseek-v4-pro" in rows
+    assert rows["opencode-go-deepseek-v4-pro"]["api_key_credential"] == "DROID_BYOK_OPENCODE_GO_API_KEY"
+    assert rows["opencode-go-deepseek-v4-pro"]["provider_display_name"] == "OpenCode Go"
+    assert rows["opencode-go-deepseek-v4-pro"]["max_context_limit"] == 1000000
+    assert rows["opencode-go-deepseek-v4-pro"]["no_image_support"] is True
+    assert rows["opencode-go-kimi-k2-6"]["no_image_support"] is False
+    assert rows["xiaomi-mimo-v2-5"]["no_image_support"] is True
+    assert rows["grok-composer-2-5-fast"]["base_url"] == "http://127.0.0.1:8317/v1"
+    assert "api_key" not in rows["grok-composer-2-5-fast"]
+
+    output = write_desktop_models(tmp_path / "models.json")
+    loaded = json.loads(output.read_text())
+    assert loaded == payload
+    assert "DROID_BYOK_OPENCODE_GO_API_KEY" in output.read_text()
+    assert "sk-" not in output.read_text()
 
 
 def test_default_missing_settings_allows_chatgpt_only(monkeypatch, tmp_path):
@@ -270,34 +354,37 @@ def test_patch_app_fails_off_macos(monkeypatch, capsys):
     monkeypatch.setattr(cli.sys, "platform", "win32")
 
     assert cli.patch_codex_app() == 1
-    assert "macOS-only" in capsys.readouterr().err
+    assert "supports macOS app bundles" in capsys.readouterr().err
 
 
 def test_restore_app_fails_off_macos(monkeypatch, capsys):
-    monkeypatch.setattr(cli.sys, "platform", "linux")
+    monkeypatch.setattr(cli.sys, "platform", "win32")
 
     assert cli.restore_codex_app_bundle() == 1
-    assert "macOS-only" in capsys.readouterr().err
+    assert "supports macOS app bundles" in capsys.readouterr().err
 
 
 def test_desktop_bundle_patch_applies_model_picker_and_sidebar(tmp_path):
     assets = tmp_path / "webview" / "assets"
     assets.mkdir(parents=True)
-    model_bundle = assets / "model-queries-test.js"
+    model_bundle = assets / "models-and-reasoning-efforts-test.js"
     sidebar_bundle = assets / "app-server-manager-signals-test.js"
-    model_bundle.write_text(f"before {cli.MODEL_PICKER_NEEDLE} after")
-    sidebar_bundle.write_text(f"before {cli.SIDEBAR_RECENT_THREADS_NEEDLE} after")
+    model_bundle.write_text("before let a=[],o=null,s=i&&e!==`amazonBedrock`; after")
+    sidebar_bundle.write_text(
+        "before listRecentThreads({cursor:e,limit:t}){return this.params.requestClient.sendRequest(`thread/list`,"
+        "{limit:t,cursor:e,sortKey:this.recentConversationSortKey,modelProviders:null,archived:!1,sourceKinds:he})} after"
+    )
 
     assert cli._patch_codex_desktop_bundles(tmp_path) is True
-    assert cli.MODEL_PICKER_REPLACEMENT in model_bundle.read_text()
-    assert cli.SIDEBAR_RECENT_THREADS_REPLACEMENT in sidebar_bundle.read_text()
+    assert "let a=[],o=null,s=!1;" in model_bundle.read_text()
+    assert "modelProviders:[]" in sidebar_bundle.read_text()
     assert cli._patch_codex_desktop_bundles(tmp_path) is False
 
 
 def test_desktop_bundle_patch_fails_when_sidebar_needle_is_missing(tmp_path):
     assets = tmp_path / "webview" / "assets"
     assets.mkdir(parents=True)
-    (assets / "model-queries-test.js").write_text(cli.MODEL_PICKER_NEEDLE)
+    (assets / "models-and-reasoning-efforts-test.js").write_text("let a=[],o=null,s=i&&e!==`amazonBedrock`;")
     (assets / "app-server-manager-signals-test.js").write_text("different build")
 
     assert cli._patch_codex_desktop_bundles(tmp_path) is None

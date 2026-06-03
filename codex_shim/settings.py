@@ -178,6 +178,8 @@ class ShimModel:
     index: int = 0
     max_context_limit: int | None = None
     max_output_tokens: int | None = None
+    auto_compact_token_limit: int | None = None
+    truncation_limit: int | None = None
     no_image_support: bool = False
     extra_headers: dict[str, str] = field(default_factory=dict)
     raw: dict[str, Any] = field(default_factory=dict)
@@ -239,10 +241,14 @@ class ModelSettings:
                     display_name=display_name,
                     provider=provider,
                     base_url=base_url,
-                    api_key=_resolve_api_key(str(_field(row, "api_key", "apiKey", default=""))),
+                    api_key=_resolve_api_key_from_row(row),
                     index=index,
                     max_context_limit=_int_or_none(_field(row, "max_context_limit", "maxContextLimit")),
                     max_output_tokens=_int_or_none(_field(row, "max_output_tokens", "maxOutputTokens")),
+                    auto_compact_token_limit=_int_or_none(
+                        _field(row, "auto_compact_token_limit", "autoCompactTokenLimit")
+                    ),
+                    truncation_limit=_int_or_none(_field(row, "truncation_limit", "truncationLimit")),
                     no_image_support=bool(_field(row, "no_image_support", "noImageSupport", default=False)),
                     extra_headers=extra_headers,
                     raw=row,
@@ -324,18 +330,53 @@ def _field(row: dict[str, Any], *keys: str, default: Any = None) -> Any:
     return default
 
 
+def _resolve_api_key_from_row(row: dict[str, Any]) -> str:
+    explicit = _field(row, "api_key", "apiKey", "bearerToken")
+    if explicit is not None:
+        return _resolve_api_key_value(str(explicit))
+
+    env_name = str(_field(row, "api_key_env", "apiKeyEnv", default="") or "").strip()
+    if env_name:
+        return os.environ.get(env_name, "").strip()
+
+    credential_name = str(
+        _field(row, "api_key_credential", "apiKeyCredential", "credential", "credentialName", default="") or ""
+    ).strip()
+    if credential_name:
+        return _resolve_credential(credential_name)
+
+    file_name = str(_field(row, "api_key_file", "apiKeyFile", default="") or "").strip()
+    if file_name:
+        try:
+            return Path(file_name).expanduser().read_text().strip()
+        except OSError:
+            return ""
+
+    return ""
+
+
 def _resolve_api_key(value: str) -> str:
+    # Backward-compatible helper kept for external callers. New settings rows
+    # use _resolve_api_key_from_row so missing keys do not silently fall back to
+    # unrelated credential stores.
+    return _resolve_api_key_value(value)
+
+
+def _resolve_api_key_value(value: str) -> str:
     raw = value.strip()
     if raw.startswith("${") and raw.endswith("}"):
         raw = os.environ.get(raw[2:-1].strip(), "")
-    if not raw and DEFAULT_CURSOR_API_KEY_FILE.exists():
-        try:
-            raw = DEFAULT_CURSOR_API_KEY_FILE.read_text().strip()
-        except OSError:
-            raw = ""
-    if not raw:
-        raw = os.environ.get("CURSOR_API_KEY", "").strip()
     return raw
+
+
+def _resolve_credential(name: str) -> str:
+    credentials_dir = os.environ.get("CREDENTIALS_DIRECTORY", "").strip()
+    if credentials_dir:
+        try:
+            return (Path(credentials_dir) / name).read_text().strip()
+        except OSError:
+            pass
+    return os.environ.get(name, "").strip()
 
 
 def _int_or_none(value: Any) -> int | None:

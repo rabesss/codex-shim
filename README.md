@@ -157,7 +157,7 @@ Use one of these setups:
 | WSL | Supported | Works like Linux. Best when Codex CLI/Desktop is also being driven from WSL. |
 | Git Bash | Supported | Works with the POSIX `bin/` wrappers if Python/Codex are on `PATH`. |
 | `bin/codex-app`, `bin/codex-model` in PowerShell/cmd | Not native | These are shell scripts. Use `codex-shim app ...` and `codex-shim model ...` instead. |
-| `patch-app` / `restore-app` | macOS only | They target `/Applications/Codex.app` and Electron ASAR signing on macOS. |
+| `patch-app` / `restore-app` | macOS + Linux overlay | They patch `/Applications/Codex.app` on macOS or a user-local Linux overlay copied from `/opt/codex-desktop`. |
 
 Native Windows quick check:
 
@@ -190,7 +190,7 @@ Path behavior is intentionally ordinary:
   the native Windows install path or manually keep the Windows config in sync.
 - The local provider URL is still `http://127.0.0.1:8765/v1`.
 
-The optional macOS picker patch is not required for the shim server to work. On
+The optional Desktop picker patch is not required for the shim server to work. On
 Windows, if Codex can read the generated catalog/provider config, requests route
 through the same local endpoint as every other platform.
 
@@ -257,7 +257,7 @@ plus the `GPT-5.5` ChatGPT passthrough slug if (and only if) `~/.codex/auth.json
 holds a valid `tokens.access_token`.
 
 If your Codex Desktop's model picker only shows `default` and refuses to render
-the catalog entries, apply the macOS picker patch below.
+the catalog entries, apply the Desktop picker patch below.
 
 ### 3. Switch the active Desktop model
 
@@ -331,7 +331,28 @@ legacy top-level `customModels` array, so existing model config exports can be
 used directly.
 
 The shim **never copies your API keys** into the generated catalog. Keys stay
-in your settings file and are read fresh on every request.
+in your settings file or runtime credential source and are read fresh on every
+request.
+
+API keys can be supplied without plaintext settings:
+
+```json
+{
+  "model": "glm-5.1",
+  "provider": "generic-chat-completion-api",
+  "base_url": "https://api.z.ai/api/coding/paas/v4",
+  "api_key_credential": "DROID_BYOK_ZAI_CODING_API_KEY"
+}
+```
+
+Credential resolution order:
+
+| field | behavior |
+|---|---|
+| `api_key` / `apiKey` | Literal value, with `${ENV_VAR}` expansion. |
+| `api_key_env` / `apiKeyEnv` | Read this environment variable. |
+| `api_key_credential` / `apiKeyCredential` | Read `$CREDENTIALS_DIRECTORY/<name>` from systemd credentials, then environment fallback. |
+| `api_key_file` / `apiKeyFile` | Read a local owner-protected file. |
 
 Supported `provider` values:
 
@@ -348,8 +369,56 @@ Useful model fields:
 | `display_name` | Human-readable picker label. |
 | `max_context_limit` | Catalog context window and compaction limits. |
 | `max_output_tokens` | Default max output when translating to Anthropic. |
+| `auto_compact_token_limit` | Explicit Desktop auto-compaction threshold. |
+| `truncation_limit` | Explicit Desktop truncation policy token limit. |
 | `no_image_support` | When true, catalog advertises text-only input. |
 | `extra_headers` | Optional upstream headers merged into requests. |
+
+---
+
+## Linux desktop provider bridge (fork)
+
+The [`rabesss/codex-shim`](https://github.com/rabesss/codex-shim) fork adds a
+maintained **multi-provider catalog** for Codex Desktop on Linux. It is a
+Codex-specific bridge, not a general-purpose gateway:
+
+```text
+Codex Desktop/CLI -> codex-shim :8765 -> selected provider endpoint
+```
+
+[CLIProxyAPI](https://github.com/router-for-me/CLIProxyAPI) can stay in use for
+Cursor and other tools. This fork calls CPA only for OAuth-backed routes (for
+example `grok-*` slugs). Direct API-key providers use their own `base_url` and
+credential names resolved at runtime.
+
+Generate the bundled provider-prefixed matrix:
+
+```bash
+codex-shim desktop write-models --output ~/.codex-shim/models.json
+codex-shim generate
+systemctl --user restart codex-shim.service   # optional user unit
+```
+
+Example slugs:
+
+```text
+opencode-go-deepseek-v4-pro
+zai-glm-5-1
+xiaomi-mimo-v2-5-pro
+commandcode-deepseek-v4-pro
+grok-composer-2-5-fast
+```
+
+The matrix stores **credential names** (for example `DROID_BYOK_OPENCODE_GO_API_KEY`,
+`XIAOMI_MIMO_TOKEN_PLAN_API_KEY`, `CLIPROXY_INTERNAL_API_KEY`), not secret values.
+Load them via systemd `LoadCredentialEncrypted=`, environment variables, or the
+other resolution paths in the table above.
+
+Capability flags in the bundled matrix are conservative: text-only where upstream
+rejects images, vision enabled only after live smokes, and per-model context or
+compaction limits instead of a single global default.
+
+Maintainer notes: [`docs/FORK.md`](docs/FORK.md).
 
 ### Ollama / local OpenAI-compatible chat endpoints
 
@@ -472,8 +541,8 @@ open "$APP"
 
 To roll back: `sudo rm -rf "$APP" && sudo mv "$APP.unpatched-…" "$APP"`.
 
-The CLI also has helper commands for patching/restoring `app.asar` and the
-matching ASAR integrity metadata:
+The CLI also has helper commands for patching/restoring `app.asar`, including
+matching ASAR integrity metadata on macOS and the user-local Linux Desktop overlay:
 
 ```bash
 codex-shim patch-app
@@ -837,8 +906,10 @@ codex-shim model list        list slugs currently usable in the picker
 codex-shim model use <slug>  set the Desktop default model in managed config
 codex-shim codex -- <args>   exec `codex` CLI through inline shim overrides
 codex-shim app [path]        launch Codex Desktop through managed shim config
-codex-shim patch-app         patch macOS Codex Desktop picker allowlist
-codex-shim restore-app       restore macOS app.asar from patch backup
+codex-shim patch-app         patch Codex Desktop picker allowlist
+codex-shim restore-app       restore Codex Desktop app.asar from patch backup
+codex-shim desktop write-models
+                             write bundled provider-prefixed model matrix
 
 codex-app [path]             shortcut for `codex-shim app`
 codex-model [list|<slug>]    shortcut for `codex-shim model …`
@@ -849,8 +920,11 @@ Global flags:
 - `--settings <path>`: used by catalog/model/start/app/codex flows.
 - `--port <port>`: used by daemon/provider flows.
 
-`patch-app` and `restore-app` always target `/Applications/Codex.app`, do not
-use `--settings`, and exit with a clear error on Windows/Linux.
+`patch-app` and `restore-app` do not use `--settings`. On macOS they target
+`/Applications/Codex.app` or the user-local app copy. On this Linux workstation
+they patch the overlay under
+`~/.local/share/codex-desktop-linux-overlay/patched-app`, copied from
+`/opt/codex-desktop`. Other platforms exit with a clear error.
 
 ---
 
@@ -1023,7 +1097,7 @@ tail -f .codex-shim/shim.log
 The server uses a long read timeout because real coding-agent turns can stream
 for a while; a silent hang is usually upstream/network/provider behavior.
 
-### macOS app crashes after patching
+### Desktop app crashes after patching
 
 You repacked `app.asar` but did not update `ElectronAsarIntegrity` and re-sign,
 or the patch hit the wrong JavaScript bundle. Restore and retry:
@@ -1032,6 +1106,11 @@ or the patch hit the wrong JavaScript bundle. Restore and retry:
 codex-shim restore-app
 codex-shim patch-app
 ```
+
+On Linux, the patched app lives under
+`~/.local/share/codex-desktop-linux-overlay/patched-app`; restoring replaces
+that overlay's `resources/app.asar` from the shim backup and leaves
+`/opt/codex-desktop` untouched.
 
 ### Reset generated shim state
 

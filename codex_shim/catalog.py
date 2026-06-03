@@ -18,17 +18,27 @@ from .cursor_passthrough import cursor_catalog_entry, cursor_passthrough_availab
 
 
 PLAN_TIERS = ["free", "plus", "pro", "team", "business", "enterprise"]
+UPSTREAM_PROVIDER_LABELS = {
+    "deepseek": "DeepSeek",
+    "minimaxai": "MiniMax",
+    "moonshotai": "Moonshot",
+    "qwen": "Qwen",
+    "stepfun": "StepFun",
+    "xiaomi": "Xiaomi",
+    "zai-org": "Z.ai",
+}
 
 
 def catalog_entry(model: ShimModel) -> dict:
     context = model.max_context_limit or _default_context(model)
-    compact = max(8_000, int(context * 0.8))
-    truncation = min(64_000, max(8_000, int(context * 0.32)))
+    compact = model.auto_compact_token_limit or max(8_000, int(context * 0.8))
+    truncation = model.truncation_limit or min(64_000, max(8_000, int(context * 0.32)))
     reasoning = _reasoning_effort(model)
+    visual_name = _with_provider_suffix(model.display_name, _provider_label(model))
     return {
         "slug": model.slug,
-        "display_name": model.display_name,
-        "description": f"{model.display_name} via local Codex shim.",
+        "display_name": visual_name,
+        "description": f"{model.display_name} via {visual_name.removeprefix(model.display_name).removeprefix(' - ') or 'local Codex shim'}.",
         "context_window": context,
         "max_context_window": context,
         "auto_compact_token_limit": compact,
@@ -40,9 +50,9 @@ def catalog_entry(model: ShimModel) -> dict:
             {"effort": "high", "description": "Deeper reasoning"},
             {"effort": "xhigh", "description": "Maximum reasoning where supported"},
         ],
-        "default_reasoning_summary": "none",
-        "reasoning_summary_format": "none",
-        "supports_reasoning_summaries": False,
+        "default_reasoning_summary": "auto",
+        "reasoning_summary_format": "experimental",
+        "supports_reasoning_summaries": True,
         "default_verbosity": "low",
         "support_verbosity": False,
         "apply_patch_tool_type": "freeform",
@@ -77,6 +87,8 @@ def chatgpt_passthrough_entries() -> list[dict]:
     entries: list[dict] = []
     for raw in load_chatgpt_passthrough_catalog_models():
         entry = dict(raw)
+        display_name = str(entry.get("display_name") or entry.get("slug") or "ChatGPT")
+        entry["display_name"] = _with_provider_suffix(display_name, "ChatGPT/OpenAI")
         entry["visibility"] = "list"
         entry.setdefault("available_in_plans", PLAN_TIERS)
         entry.setdefault("minimal_client_version", "0.0.1")
@@ -105,6 +117,7 @@ def write_catalog(models: list[ShimModel], path: Path, router_config=None) -> Pa
         entries.extend(chatgpt_passthrough_entries())
     if cursor_passthrough_available():
         entry = cursor_catalog_entry()
+        entry["display_name"] = _with_provider_suffix(str(entry.get("display_name") or "Composer 2.5"), "Cursor")
         entry["isDefault"] = not chatgpt_passthrough_available()
         entries.append(entry)
     entries.extend(catalog_entry(model) for model in usable_byok_models(models))
@@ -176,6 +189,42 @@ def _reasoning_effort(model: ShimModel) -> str:
     return "medium"
 
 
+def _with_provider_suffix(display_name: str, provider_label: str) -> str:
+    if not provider_label:
+        return display_name
+    suffix = f" - {provider_label}"
+    if display_name.endswith(suffix):
+        return display_name
+    return f"{display_name}{suffix}"
+
+
+def _provider_label(model: ShimModel) -> str:
+    configured = str(
+        model.raw.get("provider_display_name")
+        or model.raw.get("providerDisplayName")
+        or model.raw.get("provider_label")
+        or model.raw.get("providerLabel")
+        or ""
+    ).strip()
+    if configured:
+        return configured
+
+    upstream = _upstream_provider_label(model.model)
+    if "127.0.0.1:8318" in model.base_url:
+        return f"CommandCode/{upstream}" if upstream else "CommandCode"
+    if "127.0.0.1:8317" in model.base_url:
+        return f"CLIProxyAPI/{upstream}" if upstream else "CLIProxyAPI"
+    if upstream:
+        return upstream
+    if model.provider == "generic-chat-completion-api":
+        return "OpenAI-compatible"
+    return model.provider
+
+
+def _upstream_provider_label(model_name: str) -> str:
+    owner = model_name.split("/", 1)[0].strip().lower()
+    return UPSTREAM_PROVIDER_LABELS.get(owner, owner)
+
+
 def _toml_escape(value: str) -> str:
     return value.replace("\\", "\\\\").replace('"', '\\"')
-

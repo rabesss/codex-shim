@@ -1,4 +1,4 @@
-# codex-shim — Linux Codex Desktop provider bridge (rabesss fork)
+# codex-shim — Linux Codex Desktop provider bridge
 
 **Maintained fork** of [0xSero/codex-shim](https://github.com/0xSero/codex-shim) for **Codex Desktop on Linux**: loopback Responses shim plus a **bundled BYOK model matrix** and Linux overlay tooling so Desktop can use Z.ai, OpenCode, MiniMax, Xiaomi Token Plan, CommandCode, CLIProxyAPI Grok, and related routes without hand-authoring every `models.json` row.
 
@@ -9,7 +9,7 @@
 | Situation | Where to go |
 |-----------|-------------|
 | You want the **generic** cross-platform shim (theory, macOS ASAR, Windows MSIX, Cursor, Auto Router, full upstream README) | Clone **[0xSero/codex-shim](https://github.com/0xSero/codex-shim)** — that repo is the canonical home for install depth and platform guides. |
-| You run **Codex Desktop for Linux** (`/opt/codex-desktop`), bring your own keys or local proxies, and want **first-class custom models** in the picker with fork-maintained matrix + `patch-app` | Use **this fork** ([rabesss/codex-shim](https://github.com/rabesss/codex-shim)). |
+| You run **Codex Desktop for Linux** (`/opt/codex-desktop`), bring your own keys or local proxies, and want **first-class custom models** in the picker with fork-maintained matrix + `patch-app` | Use **this repository** (clone URL below). |
 
 This README explains **what the fork is and how it differs from upstream**. It is not a shortened copy of the upstream mega-README.
 
@@ -99,4 +99,4 @@ python3 -m pytest tests/ -q
 
 MIT — see [`LICENSE`](LICENSE).
 
-Codex Desktop is a trademark of OpenAI. **rabesss/codex-shim** is maintained independently and is **not affiliated** with OpenAI or 0xSero.
+Codex Desktop is a trademark of OpenAI. This project is maintained independently and is **not affiliated** with OpenAI or 0xSero.

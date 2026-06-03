@@ -1,6 +1,6 @@
 # Fork maintenance: Linux desktop provider bridge
 
-Maintainer notes for **[rabesss/codex-shim](https://github.com/rabesss/codex-shim)**, rebased onto upstream
+Maintainer notes for **this repository**, rebased onto upstream
 **[0xSero/codex-shim](https://github.com/0xSero/codex-shim)** (`origin` → `origin/main`).
 
 ## Documentation layout

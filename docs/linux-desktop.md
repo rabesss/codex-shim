@@ -1,7 +1,7 @@
 # Linux Codex Desktop user guide
 
-This document is the **primary manual** for running **Codex Desktop on Linux** with the
-**rabesss/codex-shim** fork on branch `linux/desktop-provider-bridge`. It extends upstream
+This document is the **primary manual** for running **Codex Desktop on Linux** with this
+repository (branch `main`). It extends upstream
 [0xSero/codex-shim](https://github.com/0xSero/codex-shim) with a bundled multi-provider BYOK
 catalog, Linux overlay patching, and provider-prefixed picker labels.
 

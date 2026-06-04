@@ -1693,43 +1693,39 @@ def _set_active_model(slug: str, display_name: str | None = None) -> None:
 
 
 def _restart_codex_app() -> None:
-    """Quit and relaunch Codex Desktop in a background thread (non-blocking).
-
-    Cross-platform: ``taskkill`` + ``Codex.exe`` on Windows, ``osascript`` +
-    ``open -a Codex`` on macOS. Linux has no Codex Desktop build today, so
-    the branch is a no-op there.
-    """
+    """Quit and relaunch Linux Codex Desktop in a background thread."""
     import os as _os
+    import shutil as _shutil
     import subprocess as _subprocess
     import threading as _threading
     import time as _time
 
+    def _linux_launcher() -> list[str]:
+        env_launcher = _os.environ.get("CODEX_DESKTOP_LINUX_LAUNCHER")
+        if env_launcher:
+            return [env_launcher]
+        home = Path.home()
+        user_wrapper = home / ".local" / "bin" / "codex-desktop-patched"
+        if user_wrapper.exists():
+            return [str(user_wrapper)]
+        overlay_start = home / ".local" / "share" / "codex-desktop-linux-overlay" / "patched-app" / "start.sh"
+        if overlay_start.exists():
+            return [str(overlay_start), "--x11"]
+        launcher = _shutil.which("codex-desktop") or "/usr/bin/codex-desktop"
+        return [launcher, "--x11"]
+
     def _do_restart() -> None:
         try:
-            if _os.name == "nt":
-                _subprocess.run(
-                    ["taskkill", "/IM", "Codex.exe", "/F"],
-                    check=False,
-                    stdout=_subprocess.DEVNULL,
-                    stderr=_subprocess.DEVNULL,
-                )
-                _time.sleep(1.5)
-                local_appdata = _os.environ.get("LOCALAPPDATA", "")
-                codex_exe = Path(local_appdata) / "Programs" / "Codex" / "Codex.exe"
-                if codex_exe.exists():
-                    _subprocess.Popen([str(codex_exe)])
-                else:
-                    _subprocess.Popen(["Codex.exe"], shell=True)
-            elif sys.platform == "darwin":
-                quit_script = 'tell application "Codex" to if it is running then quit'
-                _subprocess.run(
-                    ["osascript", "-e", quit_script],
-                    check=False,
-                    stdout=_subprocess.DEVNULL,
-                    stderr=_subprocess.DEVNULL,
-                )
-                _time.sleep(1.5)
-                _subprocess.Popen(["open", "-a", "Codex"])
+            if not sys.platform.startswith("linux"):
+                return
+            _subprocess.run(
+                ["pkill", "-TERM", "-f", "codex-desktop"],
+                check=False,
+                stdout=_subprocess.DEVNULL,
+                stderr=_subprocess.DEVNULL,
+            )
+            _time.sleep(1.5)
+            _subprocess.Popen(_linux_launcher())
         except OSError:
             pass
 

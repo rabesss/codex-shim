@@ -3,16 +3,13 @@ from __future__ import annotations
 import argparse
 import os
 from pathlib import Path
-import ctypes
 import signal
 import subprocess
 import sys
 import time
 import hashlib
 import json
-import plistlib
 import shutil
-import struct
 from urllib.request import urlopen
 
 from . import router as router_module
@@ -51,16 +48,9 @@ CODEX_CONFIG_PATH = Path.home() / ".codex" / "config.toml"
 CODEX_CONFIG_BACKUP_PATH = RUNTIME_DIR / "config.toml.before-codex-shim"
 MANAGED_BEGIN = "# >>> codex-shim managed >>>"
 MANAGED_END = "# <<< codex-shim managed <<<"
-WINDOWS_PROCESS_TERMINATE = 0x0001
-WINDOWS_PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
-WINDOWS_STILL_ACTIVE = 259
 PREVIOUS_TOP_LEVEL_PREFIX = "# codex-shim previous-top-level = "
 MANAGED_TOP_LEVEL_KEYS = {"model", "model_provider", "model_catalog_json"}
 HEALTH_CHECK_TIMEOUT_SECONDS = 3.0
-APP_ASAR_BACKUP_NAME = "app.asar.before-codex-shim-model-picker-patch"
-INFO_PLIST_BACKUP_NAME = "Info.plist.before-codex-shim-model-picker-patch"
-SYSTEM_CODEX_APP = Path("/Applications/Codex.app")
-USER_CODEX_APP = Path.home() / "Applications" / "Codex.app"
 LINUX_SYSTEM_CODEX_APP = Path("/opt/codex-desktop")
 LINUX_USER_CODEX_APP = Path.home() / ".local" / "share" / "codex-desktop-linux-overlay" / "patched-app"
 LINUX_SOURCE_HASH_STAMP = ".codex-shim-source-app-asar-sha256"
@@ -111,8 +101,8 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("disable")
     sub.add_parser("restart")
     sub.add_parser("status")
-    sub.add_parser("patch-app", help="Patch Codex Desktop picker/sidebar handling for custom shim models.")
-    sub.add_parser("restore-app", help="Restore Codex Desktop app.asar from the pre-patch backup.")
+    sub.add_parser("patch-app", help="Patch Linux Codex Desktop picker/sidebar handling for custom shim models.")
+    sub.add_parser("restore-app", help="Restore Linux Codex Desktop app.asar from the pre-patch backup.")
 
     model_parser = sub.add_parser("model", help="List or set the active shim model in Codex config.")
     model_sub = model_parser.add_subparsers(dest="model_command", required=True)
@@ -123,7 +113,7 @@ def main(argv: list[str] | None = None) -> int:
     codex_parser = sub.add_parser("codex", help="Run Codex CLI with opt-in shim config overrides.")
     codex_parser.add_argument("args", nargs=argparse.REMAINDER)
 
-    app_parser = sub.add_parser("app", help="Launch Codex Desktop with opt-in shim config overrides.")
+    app_parser = sub.add_parser("app", help="Launch Linux Codex Desktop with opt-in shim config overrides.")
     app_parser.add_argument("-m", "--model", dest="model_slug")
     app_parser.add_argument("path", nargs="?", default=".")
 
@@ -133,13 +123,6 @@ def main(argv: list[str] | None = None) -> int:
     desktop_write.add_argument("--output", type=Path, default=DEFAULT_SETTINGS)
     desktop_write.add_argument("--no-commandcode", action="store_true", help="Omit direct CommandCode adapter routes.")
     desktop_write.add_argument("--no-cpa-oauth", action="store_true", help="Omit CPA-backed OAuth-only routes such as Grok CLI.")
-    # Deprecated alias: `codex-shim ravish write-models` (hidden from help)
-    ravish_parser = sub.add_parser("ravish", help=argparse.SUPPRESS)
-    ravish_sub = ravish_parser.add_subparsers(dest="ravish_command", required=True)
-    ravish_write = ravish_sub.add_parser("write-models", help=argparse.SUPPRESS)
-    ravish_write.add_argument("--output", type=Path, default=DEFAULT_SETTINGS)
-    ravish_write.add_argument("--no-commandcode", action="store_true")
-    ravish_write.add_argument("--no-cpa-oauth", action="store_true")
 
     args = parser.parse_args(argv)
     if args.command == "generate":
@@ -187,16 +170,14 @@ def main(argv: list[str] | None = None) -> int:
         install_codex_config(args.settings, args.port, args.model_slug)
         exec_codex_app(args.settings, args.port, args.path)
         return 0
-    if args.command in {"desktop", "ravish"}:
-        write_cmd = getattr(args, "desktop_command", None) or getattr(args, "ravish_command", None)
-        if write_cmd == "write-models":
-            output = write_desktop_models(
-                args.output,
-                include_commandcode=not args.no_commandcode,
-                include_cpa_oauth=not args.no_cpa_oauth,
-            )
-            print(f"Wrote desktop model matrix to {output}")
-            return 0
+    if args.command == "desktop" and args.desktop_command == "write-models":
+        output = write_desktop_models(
+            args.output,
+            include_commandcode=not args.no_commandcode,
+            include_cpa_oauth=not args.no_cpa_oauth,
+        )
+        print(f"Wrote desktop model matrix to {output}")
+        return 0
     return 2
 
 
@@ -388,20 +369,15 @@ def exec_codex(settings_path: Path, port: int, codex_args: list[str]) -> None:
         codex_args = codex_args[1:]
     args = ["codex", *overrides, *codex_args]
     env = _with_loopback_no_proxy(os.environ.copy())
-    if os.name == "nt":
-        raise SystemExit(subprocess.call(args, env=env))
     os.execvpe("codex", args, env)
 
 
 def exec_codex_app(settings_path: Path, port: int, path: str) -> None:
-    _quit_codex_app()
-    codex_app = patched_codex_app_bundle()
-    if codex_app is not None:
-        subprocess.Popen(["open", "-a", str(codex_app)], env=_with_loopback_no_proxy(os.environ.copy()))
-    else:
-        args = ["codex", "app", path]
-        subprocess.Popen(args, env=_with_loopback_no_proxy(os.environ.copy()))
-    _foreground_codex_app()
+    if not sys.platform.startswith("linux"):
+        raise SystemExit("codex-shim app is Linux-only in this fork.")
+    _quit_linux_codex_desktop()
+    args = _linux_codex_desktop_command(path)
+    subprocess.Popen(args, env=_with_loopback_no_proxy(os.environ.copy()))
 
 
 def _with_loopback_no_proxy(env: dict[str, str]) -> dict[str, str]:
@@ -416,98 +392,48 @@ def _with_loopback_no_proxy(env: dict[str, str]) -> dict[str, str]:
     return env
 
 
-def _quit_codex_app() -> None:
-    script = 'tell application "Codex" to if it is running then quit'
+def _linux_codex_desktop_command(path: str = ".") -> list[str]:
+    launcher = os.environ.get("CODEX_DESKTOP_LINUX_LAUNCHER")
+    if launcher:
+        return [launcher, path]
+
+    user_wrapper = Path.home() / ".local" / "bin" / "codex-desktop-patched"
+    if user_wrapper.exists():
+        return [str(user_wrapper), path]
+
+    patched_start = LINUX_USER_CODEX_APP / "start.sh"
+    if patched_start.exists():
+        return [str(patched_start), "--x11", path]
+
+    system_launcher = shutil.which("codex-desktop") or "/usr/bin/codex-desktop"
+    return [system_launcher, "--x11", path]
+
+
+def _quit_linux_codex_desktop() -> None:
     try:
-        subprocess.run(["osascript", "-e", script], check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        subprocess.run(
+            ["pkill", "-TERM", "-f", "codex-desktop"],
+            check=False,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
         time.sleep(1.0)
     except OSError:
         pass
 
 
 def patch_codex_app() -> int:
-    if sys.platform == "darwin":
-        return _patch_macos_codex_app()
     if sys.platform.startswith("linux"):
         return _patch_linux_codex_app()
-    print("patch-app supports macOS app bundles and this local Linux Codex Desktop overlay only.", file=sys.stderr)
+    print("patch-app supports Linux Codex Desktop overlays only.", file=sys.stderr)
     return 1
-
-
-def _patch_macos_codex_app() -> int:
-    codex_app = _codex_app_bundle_for_patch()
-    app_asar = codex_app / "Contents/Resources/app.asar"
-    info_plist = codex_app / "Contents/Info.plist"
-    backup = RUNTIME_DIR / APP_ASAR_BACKUP_NAME
-    info_backup = RUNTIME_DIR / INFO_PLIST_BACKUP_NAME
-
-    if not app_asar.exists():
-        print(f"Codex app bundle not found at {codex_app}.", file=sys.stderr)
-        return 1
-    if codex_app == USER_CODEX_APP:
-        print(f"Patching user Codex copy at {codex_app}.")
-    if not info_plist.exists():
-        print(f"Codex Info.plist not found at {info_plist}.", file=sys.stderr)
-        return 1
-    if not _has_command("npx"):
-        print("npx is required to patch the Electron asar bundle.", file=sys.stderr)
-        return 1
-
-    RUNTIME_DIR.mkdir(parents=True, exist_ok=True)
-    if not backup.exists():
-        backup.write_bytes(app_asar.read_bytes())
-        print(f"Backed up original app.asar to {backup}.")
-    versioned_backup = RUNTIME_DIR / f"app.asar.before-codex-shim-model-picker-patch.{_app_asar_hash(app_asar)[:12]}"
-    if not versioned_backup.exists():
-        versioned_backup.write_bytes(app_asar.read_bytes())
-        print(f"Backed up current app.asar to {versioned_backup}.")
-    if not info_backup.exists():
-        info_backup.write_bytes(info_plist.read_bytes())
-        print(f"Backed up original Info.plist to {info_backup}.")
-
-    _quit_codex_app()
-    workdir = RUNTIME_DIR / "app-asar-work-user"
-    if workdir.exists():
-        import shutil
-
-        shutil.rmtree(workdir)
-    workdir.mkdir(parents=True)
-
-    subprocess.run(["npx", "--yes", "asar", "extract", str(app_asar), str(workdir)], check=True)
-    changed = _patch_codex_desktop_bundles(workdir)
-    if changed is None:
-        return 1
-    if changed:
-        subprocess.run(["npx", "--yes", "asar", "pack", str(workdir), str(app_asar)], check=True)
-        _update_app_asar_integrity(app_asar, info_plist)
-        _resign_codex_app(codex_app)
-    return 0
 
 
 def restore_codex_app_bundle() -> int:
     if sys.platform.startswith("linux"):
         return _restore_linux_codex_app_bundle()
-    if sys.platform != "darwin":
-        print("restore-app supports macOS app bundles and this local Linux Codex Desktop overlay only.", file=sys.stderr)
-        return 1
-    codex_app = patched_codex_app_bundle() or _codex_app_bundle_for_patch()
-    app_asar = codex_app / "Contents/Resources/app.asar"
-    info_plist = codex_app / "Contents/Info.plist"
-    backup = RUNTIME_DIR / APP_ASAR_BACKUP_NAME
-    info_backup = RUNTIME_DIR / INFO_PLIST_BACKUP_NAME
-    if not backup.exists():
-        print(f"No app.asar backup found at {backup}.")
-        return 0
-    _quit_codex_app()
-    app_asar.write_bytes(backup.read_bytes())
-    if info_backup.exists():
-        info_plist.write_bytes(info_backup.read_bytes())
-        print(f"Restored {info_plist} from {info_backup}.")
-    elif info_plist.exists():
-        _update_app_asar_integrity(app_asar, info_plist)
-    _resign_codex_app(codex_app)
-    print(f"Restored {app_asar} from {backup}.")
-    return 0
+    print("restore-app supports Linux Codex Desktop overlays only.", file=sys.stderr)
+    return 1
 
 
 def _patch_linux_codex_app() -> int:
@@ -598,24 +524,6 @@ def _app_asar_hash(path: Path) -> str:
     return h.hexdigest()
 
 
-def _app_asar_header_hash(path: Path) -> str:
-    with path.open("rb") as f:
-        _, _, _, json_size = struct.unpack("<4I", f.read(16))
-        header_json = f.read(json_size)
-    return hashlib.sha256(header_json).hexdigest()
-
-
-def _update_app_asar_integrity(app_asar: Path, info_plist: Path) -> None:
-    header_hash = _app_asar_header_hash(app_asar)
-    data = plistlib.loads(info_plist.read_bytes())
-    try:
-        data["ElectronAsarIntegrity"]["Resources/app.asar"]["hash"] = header_hash
-    except KeyError as exc:
-        raise RuntimeError(f"Could not update ElectronAsarIntegrity in {info_plist}") from exc
-    info_plist.write_bytes(plistlib.dumps(data))
-    print("Updated ElectronAsarIntegrity for app.asar.")
-
-
 def _patch_codex_desktop_bundles(workdir: Path) -> bool | None:
     patches = [
         (
@@ -688,89 +596,6 @@ def _read_text_lossy(path: Path) -> str:
         return path.read_text()
     except UnicodeDecodeError:
         return path.read_text(errors="ignore")
-
-
-def patched_codex_app_bundle() -> Path | None:
-    for codex_app in (USER_CODEX_APP, SYSTEM_CODEX_APP):
-        app_asar = codex_app / "Contents/Resources/app.asar"
-        if app_asar.exists() and _app_asar_is_patched(app_asar):
-            return codex_app
-    return None
-
-
-def _codex_app_bundle_for_patch() -> Path:
-    system_asar = SYSTEM_CODEX_APP / "Contents/Resources/app.asar"
-    if system_asar.exists() and _path_is_writable(system_asar):
-        return SYSTEM_CODEX_APP
-    return _ensure_user_codex_app()
-
-
-def _ensure_user_codex_app() -> Path:
-    user_asar = USER_CODEX_APP / "Contents/Resources/app.asar"
-    if user_asar.exists():
-        return USER_CODEX_APP
-    system_asar = SYSTEM_CODEX_APP / "Contents/Resources/app.asar"
-    if not system_asar.exists():
-        raise SystemExit(f"Codex Desktop not found at {SYSTEM_CODEX_APP}.")
-    USER_CODEX_APP.parent.mkdir(parents=True, exist_ok=True)
-    subprocess.run(["ditto", str(SYSTEM_CODEX_APP), str(USER_CODEX_APP)], check=True)
-    print(f"Copied Codex Desktop to {USER_CODEX_APP} for patching.")
-    return USER_CODEX_APP
-
-
-def _path_is_writable(path: Path) -> bool:
-    try:
-        with path.open("r+b"):
-            return True
-    except OSError:
-        return False
-
-
-def _app_asar_is_patched(app_asar: Path) -> bool:
-    try:
-        text = app_asar.read_bytes().decode("utf-8", errors="ignore")
-    except OSError:
-        return False
-    return any(replacement in text for replacement in MODEL_PICKER_REPLACEMENTS) and any(
-        replacement in text for replacement in SIDEBAR_RECENT_THREADS_REPLACEMENTS
-    )
-
-
-def _resign_codex_app(codex_app: Path = SYSTEM_CODEX_APP) -> None:
-    # Electron validates app.asar through the bundle signature metadata at
-    # startup. Re-sign after patching so the modified archive does not trip the
-    # asar integrity check.
-    subprocess.run(
-        ["codesign", "--force", "--deep", "--sign", "-", str(codex_app)],
-        check=True,
-    )
-    print(f"Re-signed {codex_app} after patch.")
-
-
-def _foreground_codex_app() -> None:
-    script = '''
-tell application "Codex" to activate
-delay 0.5
-tell application "System Events"
-  if exists process "Codex" then
-    tell process "Codex"
-      set frontmost to true
-      if (count of windows) is 0 then
-        keystroke "n" using command down
-        delay 0.3
-      end if
-      if (count of windows) > 0 then
-        set position of window 1 to {80, 60}
-        set size of window 1 to {1400, 980}
-      end if
-    end tell
-  end if
-end tell
-'''
-    try:
-        subprocess.run(["osascript", "-e", script], check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    except OSError:
-        pass
 
 
 def _provider_display_name(models, slug: str, router_config=None) -> str:
@@ -916,21 +741,10 @@ def _remove_section(text: str, section: str) -> str:
 
 def _popen_daemon(cmd: list[str], log, env: dict[str, str]) -> subprocess.Popen:
     kwargs = {"cwd": str(PROJECT_ROOT), "env": env, "stdout": log, "stderr": log}
-    if os.name == "nt":
-        creationflags = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0) | getattr(subprocess, "DETACHED_PROCESS", 0)
-        return subprocess.Popen(cmd, creationflags=creationflags, **kwargs)
     return subprocess.Popen(cmd, start_new_session=True, **kwargs)
 
 
 def _terminate_pid(pid: int) -> None:
-    if os.name == "nt":
-        handle = ctypes.windll.kernel32.OpenProcess(WINDOWS_PROCESS_TERMINATE, False, pid)
-        if handle:
-            try:
-                ctypes.windll.kernel32.TerminateProcess(handle, 0)
-            finally:
-                ctypes.windll.kernel32.CloseHandle(handle)
-        return
     os.kill(pid, signal.SIGTERM)
 
 
@@ -1057,17 +871,6 @@ def _read_pid() -> int | None:
 def _pid_running(pid: int | None) -> bool:
     if not pid:
         return False
-    if os.name == "nt":
-        handle = ctypes.windll.kernel32.OpenProcess(WINDOWS_PROCESS_QUERY_LIMITED_INFORMATION, False, pid)
-        if not handle:
-            return False
-        try:
-            exit_code = ctypes.c_ulong()
-            if not ctypes.windll.kernel32.GetExitCodeProcess(handle, ctypes.byref(exit_code)):
-                return False
-            return exit_code.value == WINDOWS_STILL_ACTIVE
-        finally:
-            ctypes.windll.kernel32.CloseHandle(handle)
     try:
         os.kill(pid, 0)
         return True

@@ -1,9 +1,7 @@
 from __future__ import annotations
 
 import json
-import hashlib
-import plistlib
-import struct
+from pathlib import Path
 
 import pytest
 
@@ -255,11 +253,11 @@ def test_write_catalog_includes_gpt_models_when_auth_present(tmp_path, auth_pres
     assert [model["slug"] for model in data["models"]] == list(FALLBACK_CHATGPT_PASSTHROUGH_SLUGS)
 
 
-def test_managed_config_escapes_windows_catalog_path(monkeypatch):
-    monkeypatch.setattr(cli, "CATALOG_PATH", r"C:\Users\User\codex-shim\.codex-shim\custom_model_catalog.json")
+def test_managed_config_uses_linux_catalog_path(monkeypatch):
+    monkeypatch.setattr(cli, "CATALOG_PATH", Path("/tmp/codex-shim/custom_model_catalog.json"))
     top_block, _ = cli._managed_config_blocks("vendor\\model", 8765)
     assert 'model = "vendor\\\\model"' in top_block
-    assert 'model_catalog_json = "C:\\\\Users\\\\User\\\\codex-shim\\\\.codex-shim\\\\custom_model_catalog.json"' in top_block
+    assert 'model_catalog_json = "/tmp/codex-shim/custom_model_catalog.json"' in top_block
 
 
 def test_install_codex_config_is_idempotent(monkeypatch, tmp_path):
@@ -350,18 +348,24 @@ def test_loopback_no_proxy_adds_upper_and_lowercase_entries():
     assert env["no_proxy"] == "127.0.0.1,localhost,::1"
 
 
-def test_patch_app_fails_off_macos(monkeypatch, capsys):
-    monkeypatch.setattr(cli.sys, "platform", "win32")
+def test_patch_app_is_linux_only(monkeypatch, capsys):
+    monkeypatch.setattr(cli.sys, "platform", "darwin")
 
     assert cli.patch_codex_app() == 1
-    assert "supports macOS app bundles" in capsys.readouterr().err
+    assert "Linux Codex Desktop overlays only" in capsys.readouterr().err
 
 
-def test_restore_app_fails_off_macos(monkeypatch, capsys):
-    monkeypatch.setattr(cli.sys, "platform", "win32")
+def test_restore_app_is_linux_only(monkeypatch, capsys):
+    monkeypatch.setattr(cli.sys, "platform", "darwin")
 
     assert cli.restore_codex_app_bundle() == 1
-    assert "supports macOS app bundles" in capsys.readouterr().err
+    assert "Linux Codex Desktop overlays only" in capsys.readouterr().err
+
+
+def test_linux_desktop_command_prefers_explicit_launcher(monkeypatch):
+    monkeypatch.setenv("CODEX_DESKTOP_LINUX_LAUNCHER", "/custom/codex-desktop")
+
+    assert cli._linux_codex_desktop_command("/work") == ["/custom/codex-desktop", "/work"]
 
 
 def test_desktop_bundle_patch_applies_model_picker_and_sidebar(tmp_path):
@@ -388,21 +392,6 @@ def test_desktop_bundle_patch_fails_when_sidebar_needle_is_missing(tmp_path):
     (assets / "app-server-manager-signals-test.js").write_text("different build")
 
     assert cli._patch_codex_desktop_bundles(tmp_path) is None
-
-
-def test_update_app_asar_integrity_uses_asar_json_header_hash(tmp_path):
-    header_json = b'{"files":{"x":{"offset":"0","size":1}}}'
-    app_asar = tmp_path / "app.asar"
-    app_asar.write_bytes(struct.pack("<4I", 4, len(header_json), 0, len(header_json)) + header_json + b"x")
-    info_plist = tmp_path / "Info.plist"
-    info_plist.write_bytes(
-        plistlib.dumps({"ElectronAsarIntegrity": {"Resources/app.asar": {"hash": "old"}}})
-    )
-
-    cli._update_app_asar_integrity(app_asar, info_plist)
-
-    data = plistlib.loads(info_plist.read_bytes())
-    assert data["ElectronAsarIntegrity"]["Resources/app.asar"]["hash"] == hashlib.sha256(header_json).hexdigest()
 
 
 class ModelSettingsFixture:

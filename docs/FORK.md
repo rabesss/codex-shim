@@ -30,7 +30,7 @@ git diff origin/main...HEAD -- ':!*.md' ':!docs/*'
 | File | Change |
 |------|--------|
 | `codex_shim/desktop_models.py` | **New.** Bundled `models.json` matrix (`desktop_models_payload`, `write_desktop_models`). |
-| `codex_shim/cli.py` | `desktop write-models`; hidden deprecated `ravish write-models`; Linux `patch-app` / `restore-app`; multi-variant Desktop JS needles; health check timeout 3s. |
+| `codex_shim/cli.py` | `desktop write-models`; Linux `patch-app` / `restore-app`; multi-variant Desktop JS needles; health check timeout 3s. |
 | `codex_shim/settings.py` | `api_key_env`, `api_key_credential`, `api_key_file`; `$CREDENTIALS_DIRECTORY` + env fallback; `auto_compact_token_limit`, `truncation_limit`; no silent Cursor key fallback on empty `api_key`. |
 | `codex_shim/catalog.py` | Provider suffix on `display_name`; `provider_display_name` from settings; CommandCode/CLIProxyAPI labels from `base_url`; reasoning summary defaults. |
 | `codex_shim/server.py` | Credential error text; versioned `/vN` base URL join. |
@@ -46,18 +46,16 @@ git diff origin/main...HEAD -- ':!*.md' ':!docs/*'
 | Matrix | `codex-shim desktop write-models` → default `~/.codex-shim/models.json`; optional `--no-commandcode`, `--no-cpa-oauth`. |
 | Matrix source | Provider families and slug policy live in `desktop_models.py`; user-facing route table → [`linux-desktop.md`](linux-desktop.md). |
 | Credentials | Rows use `api_key_credential` names; CommandCode uses `api_key: "dummy"`. User setup → [`linux-desktop.md`](linux-desktop.md). |
-| Desktop picker | `patch-app` / `restore-app` for macOS bundle or Linux overlay (`CODEX_DESKTOP_LINUX_*` env overrides). |
+| Desktop picker | Linux-only `patch-app` / `restore-app` for the `codex-desktop-linux` overlay (`CODEX_DESKTOP_LINUX_*` env overrides). |
 | Catalog | Picker labels gain ` - Provider` suffix; compaction/truncation limits from settings. |
-
-`codex-shim ravish write-models` remains hidden (`argparse.SUPPRESS`) for one release cycle; scripts must use `desktop write-models`.
 
 ## CLI surface (fork-specific)
 
 | Command | Purpose |
 |---------|---------|
 | `codex-shim desktop write-models` | Write bundled matrix (`--output`, `--no-commandcode`, `--no-cpa-oauth`). |
-| `codex-shim patch-app` | Patch macOS `Codex.app` or refresh Linux overlay from `/opt/codex-desktop`. |
-| `codex-shim restore-app` | Restore from shim backup (`app.asar` or Linux overlay backup). |
+| `codex-shim patch-app` | Refresh and patch Linux overlay from `/opt/codex-desktop`. |
+| `codex-shim restore-app` | Restore Linux overlay `app.asar` from shim backup. |
 
 ## Maintainer workflow
 

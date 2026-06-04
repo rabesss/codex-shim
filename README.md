@@ -1,6 +1,6 @@
 # codex-shim — Linux Codex Desktop provider bridge
 
-**Maintained fork** of [0xSero/codex-shim](https://github.com/0xSero/codex-shim) for **Codex Desktop on Linux**: loopback Responses shim plus a **bundled BYOK model matrix** and Linux overlay tooling so Desktop can use Z.ai, OpenCode, MiniMax, Xiaomi Token Plan, CommandCode, CLIProxyAPI Grok, and related routes without hand-authoring every `models.json` row.
+**Linux-only maintained fork** of [0xSero/codex-shim](https://github.com/0xSero/codex-shim) for [ilysenko/codex-desktop-linux](https://github.com/ilysenko/codex-desktop-linux): loopback Responses shim plus a **bundled BYOK model matrix** and Linux overlay tooling so Desktop can use Z.ai, OpenCode, MiniMax, Xiaomi Token Plan, CommandCode, CLIProxyAPI Grok, and related routes without hand-authoring every `models.json` row.
 
 ---
 
@@ -8,8 +8,8 @@
 
 | Situation | Where to go |
 |-----------|-------------|
-| You want the **generic** cross-platform shim (theory, macOS ASAR, Windows MSIX, Cursor, Auto Router, full upstream README) | Clone **[0xSero/codex-shim](https://github.com/0xSero/codex-shim)** — that repo is the canonical home for install depth and platform guides. |
-| You run **Codex Desktop for Linux** (`/opt/codex-desktop`), bring your own keys or local proxies, and want **first-class custom models** in the picker with fork-maintained matrix + `patch-app` | Use **this repository** (clone URL below). |
+| You want upstream generic shim behavior, non-Linux desktop support, or platform theory | Clone **[0xSero/codex-shim](https://github.com/0xSero/codex-shim)**. |
+| You run **Codex Desktop for Linux** from **[ilysenko/codex-desktop-linux](https://github.com/ilysenko/codex-desktop-linux)** (`/opt/codex-desktop`), bring your own keys or local proxies, and want **first-class custom models** in the picker with fork-maintained matrix + `patch-app` | Use **this repository**. |
 
 This README explains **what the fork is and how it differs from upstream**. It is not a shortened copy of the upstream mega-README.
 
@@ -19,11 +19,11 @@ This README explains **what the fork is and how it differs from upstream**. It i
 
 | Layer | Upstream (`origin/main`) | This fork (`main`) |
 |-------|--------------------------|---------------------|
-| Core engine | Responses translation, daemon, `generate` / `start` / `enable`, provider adapters, ChatGPT passthrough, Auto Router docs | **Same core** — rebased onto upstream; fixes flow in via `origin/main`. |
+| Core engine | Responses translation, daemon, `generate` / `start` / `enable`, provider adapters, ChatGPT passthrough, Auto Router docs | **Same core where useful** — rebased from upstream, but platform launch/patch code is Linux-only. |
 | Desktop matrix | You maintain `models.json` yourself | **`codex_shim/desktop_models.py`** + `codex-shim desktop write-models` → bundled multi-provider matrix |
 | Credentials | Standard `api_key` / env patterns | **`api_key_env`**, **`api_key_credential`** (systemd `LoadCredentialEncrypted=`), **`api_key_file`**; no silent Cursor fallback on empty key |
 | Catalog / picker labels | Upstream display rules | **Provider suffix** on `display_name`; CommandCode / CLIProxyAPI labels from `base_url`; compaction / truncation limits from settings |
-| Codex Desktop UI | macOS `patch-app` on `.app`; upstream Linux notes vary | **Linux `patch-app` / `restore-app`** for user-local overlay under `~/.local/share/codex-desktop-linux-overlay/`; multi-variant JS needles |
+| Codex Desktop UI | Upstream platform-specific patching varies | **Linux `patch-app` / `restore-app`** for user-local overlay under `~/.local/share/codex-desktop-linux-overlay/`; multi-variant JS needles |
 | User documentation | Full README + platform guides on upstream | **[`docs/linux-desktop.md`](docs/linux-desktop.md)** (operational manual); this README (fork identity only) |
 | Maintainer documentation | Upstream contribution flow | **[`docs/FORK.md`](docs/FORK.md)** (delta, rebase, tests, publishing) |
 
@@ -36,7 +36,7 @@ Changes on this branch relative to **`origin/main`** (refresh with `git diff ori
 | Area | What shipped |
 |------|----------------|
 | **`codex_shim/desktop_models.py`** | New module: bundled `models.json` payload (`desktop_models_payload`, `write_desktop_models`). |
-| **CLI** | `codex-shim desktop write-models` (`--output`, `--no-commandcode`, `--no-cpa-oauth`); hidden deprecated `ravish write-models`; Linux-aware **`patch-app`** / **`restore-app`**; health check timeout 3s. |
+| **CLI** | `codex-shim desktop write-models` (`--output`, `--no-commandcode`, `--no-cpa-oauth`); Linux-aware **`patch-app`** / **`restore-app`**; health check timeout 3s. |
 | **`codex_shim/settings.py`** | Credential resolution order; `$CREDENTIALS_DIRECTORY` support; `auto_compact_token_limit`, `truncation_limit`. |
 | **`codex_shim/catalog.py`** | Picker `display_name` + provider labels; reasoning summary defaults. |
 | **`codex_shim/server.py`** | Clearer credential errors; versioned `/vN` base URL join. |
@@ -49,7 +49,7 @@ Changes on this branch relative to **`origin/main`** (refresh with `git diff ori
 
 ## What we do not maintain here
 
-- The **upstream long README** is not the face of this repository — generic install, subscription passthrough, Cursor Composer, Auto Router, macOS/Windows workflows, and cross-platform theory stay on **[0xSero/codex-shim](https://github.com/0xSero/codex-shim)**.
+- The **upstream long README** is not the face of this repository — generic install, subscription passthrough, Cursor Composer, Auto Router, non-Linux workflows, and platform theory stay on **[0xSero/codex-shim](https://github.com/0xSero/codex-shim)**.
 - **Operational depth** (systemd units, overlay paths, troubleshooting, full `patch-app` steps, credential file layout) lives only in **[`docs/linux-desktop.md`](docs/linux-desktop.md)** — not duplicated below.
 
 When you need upstream behavior or docs, use upstream; when you need Linux Desktop + this matrix, use this fork and the linux-desktop guide.

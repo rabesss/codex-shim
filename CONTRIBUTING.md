@@ -5,7 +5,7 @@ Thanks for hacking on the shim. Issues and PRs welcome.
 ## Dev loop
 
 ```bash
-git clone https://github.com/0xSero/codex-shim
+git clone https://github.com/rabesss/codex-shim
 cd codex-shim
 python3 -m pip install -e ".[dev]"
 
@@ -26,8 +26,8 @@ CI runs the same commands on Python 3.11 and 3.12 via
 - Compatibility notes / safer detection for new Codex Desktop builds,
   especially around the ASAR picker patch needle in
   `codex_shim/cli.py::patch_codex_app`.
-- Doc patches that name a specific build / version. "I tested on Codex
-  Desktop 0.x.y on macOS arm64 and it did Z" is more useful than a
+- Doc patches that name a specific build / version. "I tested
+  `codex-desktop-linux` package 2026.x on Arch and it did Z" is more useful than a
   generic warning.
 
 ## Code style
@@ -44,9 +44,10 @@ CI runs the same commands on Python 3.11 and 3.12 via
 
 Please include:
 
-- Codex Desktop / CLI version (`codex --version` and the Desktop About
-  panel).
-- OS (macOS arm64 / x86_64 / Linux distro / WSL).
+- Codex CLI version (`codex --version`) and `codex-desktop-linux`
+  package/version.
+- Linux distribution, desktop environment/window manager, and whether the
+  app is launched from `/opt/codex-desktop`, the patched overlay, or a wrapper.
 - Output of `codex-shim status` and the last ~80 lines of
   `.codex-shim/shim.log` with API keys redacted.
 - Whether the model is a configured BYOK/upstream entry or the `gpt-5.5`

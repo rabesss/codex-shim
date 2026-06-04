@@ -1,13 +1,16 @@
 # Linux Codex Desktop user guide
 
 This document is the **primary manual** for running **Codex Desktop on Linux** with this
-repository (branch `main`). It extends upstream
+repository (branch `main`). It targets
+[ilysenko/codex-desktop-linux](https://github.com/ilysenko/codex-desktop-linux) installs
+under `/opt/codex-desktop`. It extends upstream
 [0xSero/codex-shim](https://github.com/0xSero/codex-shim) with a bundled multi-provider BYOK
-catalog, Linux overlay patching, and provider-prefixed picker labels.
+catalog, Linux overlay patching, Linux launcher/restart behavior, and provider-prefixed picker labels.
 
 Upstream still owns Responses translation, Auto Router, ChatGPT passthrough, and core daemon
-behavior. This fork adds `desktop write-models`, credential-aware settings loading, and
-`patch-app` / `restore-app` for the user-local Desktop overlay.
+behavior where it remains applicable. This fork adds `desktop write-models`,
+credential-aware settings loading, and Linux-only `patch-app` / `restore-app` for the
+user-local Desktop overlay.
 
 **Maintainers** (rebase, matrix changes, tests): [`docs/FORK.md`](FORK.md).
 
@@ -133,9 +136,6 @@ Help (verified CLI names):
 ```bash
 codex-shim desktop write-models --help
 ```
-
-A hidden deprecated alias exists for one release cycle: `codex-shim ravish write-models`.
-Use `desktop write-models` in scripts and docs.
 
 ### 4. Generate catalog and start the shim
 
@@ -266,8 +266,8 @@ codex-shim restore-app
 Requires **`npx`**. If patch needles no longer match your Desktop version, the command may
 fail; see [`docs/FORK.md`](FORK.md) for maintainer rebase notes after Codex bumps.
 
-macOS also supports `patch-app` on `Codex.app`; Linux users should rely on the overlay paths
-above.
+This fork does not patch macOS `.app` bundles or Windows packages. Use upstream
+`0xSero/codex-shim` if you need non-Linux platform support.
 
 ---
 
@@ -419,7 +419,7 @@ Restore does not delete the overlay directory; it rewinds `app.asar` from the sh
 |-------|--------|
 | **Codex subagents / `multi_agent`** | Implemented by the Codex app runtime, not `codex-shim`. BYOK routes may return “unsupported call” for subagent tools even when they appear in schema. Enabling `[features].multi_agent` in `~/.codex/config.toml` does not make every upstream execute subagents. |
 | **Upstream tool-call quality** | The shim translates API shapes; it cannot force a provider to emit valid tool JSON. |
-| **MSIX / Store Desktop builds** | Linux guide assumes `/opt/codex-desktop` + overlay; Windows Store allowlist issues are upstream Desktop behavior (see README). |
+| **Non-Linux Desktop builds** | This fork assumes `/opt/codex-desktop` + overlay from `ilysenko/codex-desktop-linux`. Non-Linux package formats belong upstream. |
 | **Internet-exposed shim** | Default bind is loopback; do not expose `:8765` without hardening. |
 
 For product-level limitations (ASAR patch sensitivity, ChatGPT endpoint changes), see upstream

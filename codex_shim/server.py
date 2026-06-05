@@ -52,7 +52,7 @@ from .translate import (
 )
 
 DEBUG_DIR = Path(__file__).resolve().parents[1] / ".codex-shim"
-CODEX_CONFIG_PATH = Path.home() / ".codex" / "config.toml"
+CODEX_CONFIG_PATH = Path.home() / ".codex" / "codex-shim.config.toml"
 
 
 class ShimServer:
@@ -445,7 +445,7 @@ class ShimServer:
         """Forward a Responses request to chatgpt.com using the user's Codex auth.
 
         Lets the picker expose OpenAI GPT models (ChatGPT subscription) as
-        first-class models alongside configured BYOK entries.
+        first-class models alongside configured custom-model entries.
         """
         auth_path = DEFAULT_CODEX_AUTH.expanduser()
         try:
@@ -1652,7 +1652,7 @@ def _dump_debug_request(slug: str, url: str, body: dict[str, Any]) -> None:
 
 
 def _current_managed_model() -> str | None:
-    """Return the first ``model = "..."`` value from ~/.codex/config.toml."""
+    """Return the first ``model = "..."`` value from the opt-in shim profile."""
     if not CODEX_CONFIG_PATH.exists():
         return None
     try:
@@ -1674,7 +1674,7 @@ _PROVIDER_NAME_RE = re.compile(
 
 
 def _set_active_model(slug: str, display_name: str | None = None) -> None:
-    """Rewrite the active model + provider label in ~/.codex/config.toml."""
+    """Rewrite the active model + provider label in the opt-in shim profile."""
     if not CODEX_CONFIG_PATH.exists():
         return
     try:

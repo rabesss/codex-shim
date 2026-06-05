@@ -4,8 +4,9 @@ This document is the **primary manual** for running **Codex Desktop on Linux** w
 repository (branch `main`). It targets
 [ilysenko/codex-desktop-linux](https://github.com/ilysenko/codex-desktop-linux) installs
 under `/opt/codex-desktop`. It extends upstream
-[0xSero/codex-shim](https://github.com/0xSero/codex-shim) with a bundled multi-provider BYOK
-catalog, Linux overlay patching, Linux launcher/restart behavior, and provider-prefixed picker labels.
+[0xSero/codex-shim](https://github.com/0xSero/codex-shim) with a CLIProxyAPI-backed
+custom-model catalog, Linux overlay patching, Linux launcher/restart behavior, and
+route-first picker labels.
 
 Upstream still owns Responses translation, Auto Router, ChatGPT passthrough, and core daemon
 behavior where it remains applicable. This fork adds `desktop write-models`,
@@ -20,9 +21,9 @@ user-local Desktop overlay.
 
 | Goal | How the fork helps |
 |------|---------------------|
-| Many BYOK models in the Desktop picker | Bundled matrix → `~/.codex-shim/models.json` → generated catalog |
-| Stable local routing | Shim on `127.0.0.1:8765` translates Codex `/v1/responses` to each upstream API |
-| CommandCode and Grok OAuth without plaintext keys in JSON | Rows use `api_key_credential` + systemd `LoadCredentialEncrypted=` |
+| Many custom models in the Desktop picker | CLIProxyAPI discovery/bootstrap → `~/.codex-shim/models.json` → generated catalog |
+| Stable local routing | Shim on `127.0.0.1:8765` translates Codex `/v1/responses` to CLIProxyAPI-compatible chat routes |
+| CommandCode, Grok OAuth, hosted providers, and local models without plaintext keys in JSON | Rows use `api_key_credential: CLIPROXY_INTERNAL_API_KEY`; provider keys stay in CLIProxyAPI |
 | Picker shows custom slugs | Optional `patch-app` on a copy of `/opt/codex-desktop` (system install untouched) |
 
 The root [README](../README.md) stays a short entry point; **Linux Desktop setup lives here**.
@@ -32,8 +33,9 @@ The root [README](../README.md) stays a short entry point; **Linux Desktop setup
 ## Architecture
 
 Codex Desktop (or the Codex CLI with managed config) speaks OpenAI **Responses** to the shim.
-The shim picks an upstream from the **slug** and `models.json` row, then streams translated
-events back to Codex.
+The shim picks a **slug** from `models.json`, translates Codex requests into OpenAI-compatible
+chat calls, and sends those calls to CLIProxyAPI. CLIProxyAPI owns provider-specific auth,
+OAuth refresh, local model routing, and adapters such as CommandCode.
 
 ```text
 ┌─────────────────────┐
@@ -49,25 +51,25 @@ events back to Codex.
 │  127.0.0.1:8765     │
 └──────────┬──────────┘
            │
-     ┌─────┴─────┬─────────────────┬──────────────────┐
-     ▼           ▼                 ▼                  ▼
- Direct BYOK   commandcode-*    grok-*           gpt-5.5 (optional)
- provider      :8318            :8317 + CPA       ChatGPT passthrough
- base_url      adapter          OAuth proxy       (~/.codex/auth.json)
+     ┌───────────┴───────────┐              ┌──────────────────┐
+     ▼                       ▼              ▼
+ CLIProxyAPI :8317       route metadata   gpt-5.5 (optional)
+ hosted providers /      + capability     ChatGPT passthrough
+ OAuth / local routes    overrides        (~/.codex/auth.json)
+ local / CommandCode
 ```
 
 ### Routing rules (slug → upstream)
 
 | Route class | Slug pattern (examples) | Upstream | Auth in `models.json` |
 |-------------|-------------------------|----------|------------------------|
-| **Direct BYOK** | `zai-*`, `minimax-*`, `opencode-go-*`, `opencode-zen-*`, `xiaomi-*`, `crof-*` | Each row’s `base_url` (vendor API) | `api_key_credential` name (or other resolver fields in README) |
-| **CommandCode adapter** | `commandcode-*` | `http://127.0.0.1:8318/v1` | `api_key: "dummy"` (adapter handles auth) |
-| **CLIProxyAPI OAuth** | `grok-*` | `http://127.0.0.1:8317/v1` | `CLIPROXY_INTERNAL_API_KEY` via credential file |
-| **ChatGPT passthrough** | `gpt-5.5` (upstream naming) | ChatGPT Codex backend | From `~/.codex/auth.json` (not in matrix) |
+| **CLIProxyAPI custom routes** | `opencode-go-*`, `commandcode-*`, `grok-*`, `zai-coding-*`, `minimax-coding-*`, `crofai-*` | `http://127.0.0.1:8317/v1` | `CLIPROXY_INTERNAL_API_KEY` via credential file or env |
+| **ChatGPT passthrough** | `gpt-5.5` (upstream naming, explicitly enabled) | ChatGPT Codex backend | From `~/.codex/auth.json` (not in matrix) |
 
 [CLIProxyAPI](https://github.com/router-for-me/CLIProxyAPI) can stay your general proxy for
-Cursor and other tools. **This fork uses CPA on `:8317` only for OAuth-backed Grok CLI routes**
-(`grok-*`), not for every model.
+Cursor and other tools. **This fork treats CPA on `:8317` as the source of truth for custom
+models.** codex-shim does not implement provider-specific adapters; it only converts CPA route
+metadata plus Codex capability overrides into Desktop/CLI-compatible catalog rows.
 
 ---
 
@@ -76,9 +78,7 @@ Cursor and other tools. **This fork uses CPA on `:8317` only for OAuth-backed Gr
 - **Python 3.11+** and `aiohttp` (installed with the package).
 - **Codex Desktop** installed under `/opt/codex-desktop` (typical `.deb` layout).
 - **Node `npx`** — required for `patch-app` / `restore-app` (Electron ASAR extract/pack).
-- **Local services** when you enable matrix sections:
-  - CommandCode (or compatible) OpenAI-compatible API on **port 8318** for `commandcode-*`.
-  - CLIProxyAPI on **port 8317** for `grok-*`.
+- **Local service:** CLIProxyAPI on **port 8317** for generated custom-model rows.
 - **Encrypted credentials** (recommended): systemd user unit with `LoadCredentialEncrypted=`
   matching names in `models.json` (see below). Plain `api_key` / `${ENV}` still work per upstream README.
 
@@ -101,8 +101,10 @@ Ensure `~/.local/bin` is on `PATH` so `codex-shim` is available.
 
 | Purpose | Default path |
 |---------|----------------|
-| Model settings (BYOK matrix) | `~/.codex-shim/models.json` |
-| Codex CLI/Desktop config (managed block) | `~/.codex/config.toml` |
+| Model settings (custom-model matrix) | `~/.codex-shim/models.json` |
+| Shim profile config (opt-in custom mode) | `~/.codex/codex-shim.config.toml` |
+| Shim Codex CLI wrapper | `~/.local/bin/codex-shim-profile-codex` |
+| Shim Desktop launcher wrapper | `~/.local/bin/codex-desktop-shim` |
 | Generated catalog, pid, log (per checkout) | `<repo>/.codex-shim/` |
 | System Codex Desktop install (read-only source) | `/opt/codex-desktop` |
 | Patched Desktop copy (launch this) | `~/.local/share/codex-desktop-linux-overlay/patched-app` |
@@ -113,23 +115,26 @@ Override Linux overlay locations with:
 - `CODEX_DESKTOP_LINUX_SOURCE_DIR` (default `/opt/codex-desktop`)
 - `CODEX_DESKTOP_LINUX_PATCHED_DIR` (default `~/.local/share/codex-desktop-linux-overlay/patched-app`)
 
-### 3. Write the bundled model matrix
+### 3. Write the CLIProxyAPI-backed model matrix
 
 ```bash
 codex-shim desktop write-models --output ~/.codex-shim/models.json
 ```
 
-This writes **credential names only** (no secret values). Each row includes
-`generated_by: codex-shim-desktop-matrix` and a **provider-prefixed slug** (for example
-`zai-glm-5-1`, `commandcode-deepseek-v4-pro`).
+This writes **credential names only** (no secret values). When
+`CLIPROXY_INTERNAL_API_KEY` is present in the environment, the command discovers current
+chat-capable routes from CLIProxyAPI `/v1/models`; otherwise it writes a bootstrap route set.
+Each row includes `generated_by: codex-shim-cliproxyapi-discovery`, a route-prefixed slug
+(for example `opencode-go-deepseek-v4-pro`, `commandcode-deepseek-v4-pro`), and Codex
+capability metadata for image/tool/reasoning surfaces.
 
 #### `desktop write-models` flags
 
 | Flag | Effect |
 |------|--------|
 | `--output PATH` | Destination file (default `~/.codex-shim/models.json`) |
-| `--no-commandcode` | Omit all `commandcode-*` rows (use when nothing listens on `:8318`) |
-| `--no-cpa-oauth` | Omit all `grok-*` rows (use when CPA is down on `:8317`) |
+| `--no-commandcode` | Omit CLIProxyAPI rows whose owner is `commandcode` |
+| `--no-cpa-oauth` | Omit CLIProxyAPI rows whose owner is `xai` / Grok OAuth |
 
 Help (verified CLI names):
 
@@ -155,19 +160,20 @@ The daemon listens on **`127.0.0.1:8765`** unless you pass `--port`.
 
 ### 5. Wire Codex Desktop to the shim
 
-**One-shot launch** (writes managed config, starts daemon if needed):
+**One-shot launch** (writes the shim profile/wrapper, starts daemon if needed, then launches
+Desktop through the wrapper):
 
 ```bash
 codex-shim app .
 ```
 
-**Persistent enable** (same managed block, leaves Desktop launch to you):
+**Persistent enable** (writes the same shim profile/wrapper, leaves Desktop launch to you):
 
 ```bash
 codex-shim enable
 ```
 
-To remove the managed block and stop the daemon:
+To remove the shim profile/wrapper and stop the daemon:
 
 ```bash
 codex-shim disable
@@ -182,14 +188,12 @@ Global CLI flags used by these flows:
 
 ## systemd credentials (conceptual)
 
-The bundled matrix references **logical credential names**, for example:
+The generated matrix references one logical credential name:
 
-- `DROID_BYOK_ZAI_CODING_API_KEY`
-- `DROID_BYOK_MINIMAX_API_KEY`
-- `DROID_BYOK_OPENCODE_GO_API_KEY`
-- `XIAOMI_MIMO_TOKEN_PLAN_API_KEY`
-- `CROFAI_API_KEY`
 - `CLIPROXY_INTERNAL_API_KEY`
+
+Provider keys such as Z.ai, MiniMax, OpenCode, Xiaomi, CrofAI, CommandCode, or OAuth-backed
+Grok credentials belong to CLIProxyAPI and its service/config, not to `models.json`.
 
 At request time the shim resolves `api_key_credential` in this order (see README for full table):
 
@@ -201,7 +205,6 @@ At request time the shim resolves `api_key_credential` in this order (see README
 
 ```ini
 [Service]
-LoadCredentialEncrypted=DROID_BYOK_ZAI_CODING_API_KEY
 LoadCredentialEncrypted=CLIPROXY_INTERNAL_API_KEY
 # ... one line per name referenced in models.json
 ExecStart=%h/.local/bin/codex-shim start
@@ -210,8 +213,8 @@ ExecStart=%h/.local/bin/codex-shim start
 After editing encrypted credential files on disk, restart the unit so the shim receives
 fresh decrypted material under `/run/user/<uid>/credentials/`.
 
-CommandCode rows intentionally use `api_key: "dummy"` because the adapter on `:8318` performs
-its own authentication.
+For codex-shim itself, `CLIPROXY_INTERNAL_API_KEY` is enough. CLIProxyAPI can load its own
+provider credentials in its own user service.
 
 ---
 
@@ -221,14 +224,13 @@ Slugs are **stable picker IDs**. Upstream `model` IDs and `base_url` live in the
 
 | Family | Example slugs | Credential / notes |
 |--------|---------------|-------------------|
-| Z.ai Coding | `zai-glm-5-1`, `zai-glm-5`, … | `DROID_BYOK_ZAI_CODING_API_KEY` |
-| MiniMax Coding | `minimax-m2-7`, … | `DROID_BYOK_MINIMAX_API_KEY` |
-| OpenCode Go | `opencode-go-*` | `DROID_BYOK_OPENCODE_GO_API_KEY` |
-| OpenCode Zen | `opencode-zen-*` | same OpenCode Go credential |
-| Xiaomi Token Plan | `xiaomi-mimo-*` | `XIAOMI_MIMO_TOKEN_PLAN_API_KEY` |
-| CrofAI | `crof-*` | `CROFAI_API_KEY` |
-| CommandCode | `commandcode-*` | dummy key; `:8318` |
-| Grok via CPA | `grok-composer-2-5-fast`, … | `CLIPROXY_INTERNAL_API_KEY`; `:8317` |
+| Z.ai Coding | `zai-coding-glm-5-1`, `zai-coding-glm-5`, … | routed through CLIProxyAPI |
+| MiniMax Coding | `minimax-coding-minimax-m3`, … | routed through CLIProxyAPI |
+| OpenCode Go | `opencode-go-*` | routed through CLIProxyAPI |
+| OpenCode Zen | `opencode-zen-*` | routed through CLIProxyAPI |
+| CrofAI | `crofai-*` | routed through CLIProxyAPI |
+| CommandCode | `commandcode-*` | routed through CLIProxyAPI; no native adapter in codex-shim |
+| Grok via CPA | `grok-composer-2-5-fast`, … | routed through CLIProxyAPI OAuth |
 
 List what the shim will route after `generate`:
 
@@ -273,16 +275,17 @@ This fork does not patch macOS `.app` bundles or Windows packages. Use upstream
 
 ## Choosing and switching models
 
-### CLI defaults in `~/.codex/config.toml`
+### Shim profile defaults
 
 ```bash
-codex-shim model use zai-glm-5-1
-codex-shim app -m zai-glm-5-1 .
+codex-shim model use opencode-go-deepseek-v4-pro
+codex-shim app -m opencode-go-deepseek-v4-pro .
 ```
 
-`model use` regenerates the catalog, ensures the daemon is running, and updates only the
-**shim-managed** block in `~/.codex/config.toml`. Shortcuts if installed: `codex-model`,
-`codex-app`.
+`model use` regenerates the catalog, ensures the daemon is running, and updates the
+opt-in shim profile/wrapper. It does not mutate global `~/.codex/config.toml`, so normal
+`codex` stays official/direct unless you explicitly use the shim wrapper. Shortcuts if
+installed: `codex-model`, `codex-app`.
 
 ### HTTP picker (loopback only)
 
@@ -293,13 +296,14 @@ While the daemon runs, open:
 - `POST /api/switch` — body `{"slug":"...", "restart_codex": true|false}`
 
 Picker routes use the same **Host** allowlist as the API (loopback only) to block DNS
-rebinding. Display names in Desktop include a **provider suffix** from the fork catalog
-(for example `GLM 5.1 - Z.ai Coding`).
+rebinding. Display names in Desktop are **route-first** from the fork catalog
+(for example `CLIProxyAPI / OpenCode Go / DeepSeek V4 Pro`).
 
 ### ChatGPT passthrough slug
 
-If `~/.codex/auth.json` contains a valid Codex access token, upstream behavior adds
-`gpt-5.5` to the catalog. That route bypasses BYOK rows. Run `codex login` to refresh tokens.
+If `CODEX_SHIM_ENABLE_CHATGPT=1` is set and `~/.codex/auth.json` contains a valid Codex
+access token, upstream behavior adds `gpt-5.5` to the catalog. That route bypasses
+CLIProxyAPI rows. Run `codex login` to refresh tokens.
 
 ---
 
@@ -314,14 +318,17 @@ Bundled rows set, per model:
 | `auto_compact_token_limit` | Desktop auto-compaction threshold (matrix-derived) |
 | `truncation_limit` | Desktop truncation policy hint |
 | `no_image_support` | When true, catalog advertises **text-only** (`input_modalities`) |
+| `supports_tools` | When false, catalog disables parallel tool-call support for that model |
+| `supports_reasoning` | When false, catalog disables reasoning-summary support for that model |
+| `supports_streaming` | Records whether the route is expected to stream through CLIProxyAPI |
 
 **Policy notes:**
 
-- Treat **Xiaomi Token Plan** rows as **text-only** unless you have verified image payloads
-  on your endpoint (many token-plan routes reject image input).
 - Set `no_image_support: false` only after a live image request succeeds through the shim
   for that slug.
-- The catalog flag guides Codex Desktop UX; translation still forwards images if Codex sends
+- Leave `supports_tools` / `supports_reasoning` false for routes where CLIProxyAPI or the
+  upstream model cannot produce the corresponding Codex-compatible behavior.
+- The catalog flags guide Codex Desktop UX; translation still forwards payloads if Codex sends
   them unless you add custom guards. See upstream README “Computer use, shell commands, images”.
 
 Regenerate after editing `models.json`:
@@ -335,10 +342,10 @@ codex-shim generate
 ## Day-to-day commands (Linux-focused)
 
 ```text
-codex-shim desktop write-models     Write bundled matrix (--output, --no-commandcode, --no-cpa-oauth)
+codex-shim desktop write-models     Write CLIProxyAPI matrix (--output, --no-commandcode, --no-cpa-oauth)
 codex-shim generate                 Build catalog from settings
 codex-shim start | stop | restart   Daemon control
-codex-shim enable | disable         Persist or remove ~/.codex/config.toml managed block
+codex-shim enable | disable         Persist or remove shim profile/wrappers
 codex-shim status                   Health + model count
 codex-shim list                     Slugs and upstream routes
 codex-shim model list | model use   Picker-oriented slug list / set default
@@ -371,20 +378,21 @@ tail -n 80 <repo>/.codex-shim/shim.log
 
 1. Confirm `~/.codex-shim/models.json` exists (`desktop write-models`).
 2. Run `codex-shim generate` then `codex-shim list`.
-3. If using CPA or CommandCode rows, confirm `:8317` / `:8318` services are up—or regenerate
-   with `--no-cpa-oauth` / `--no-commandcode`.
+3. Confirm CLIProxyAPI is up on `:8317` and `CLIPROXY_INTERNAL_API_KEY` decrypts.
+   Regenerate with `--no-cpa-oauth` / `--no-commandcode` to omit either route class.
 
 ### Upstream 401 / credential errors
 
 - Credential name in JSON must match `LoadCredentialEncrypted=` / env name exactly.
 - Restart shim (and user unit) after rotating encrypted credentials.
-- For `grok-*`, verify CPA and `CLIPROXY_INTERNAL_API_KEY`.
-- For `commandcode-*`, verify the adapter on `:8318` (dummy key is expected).
+- For any generated custom route, verify CLIProxyAPI and `CLIPROXY_INTERNAL_API_KEY`.
+- For `commandcode-*`, verify the CommandCode route exists in CLIProxyAPI; codex-shim does
+  not talk directly to `https://api.commandcode.ai/alpha/generate`.
 
 ### Desktop picker shows only `default`
 
 1. `codex-shim generate` and `codex-shim model list` — confirm slugs exist locally.
-2. `codex-shim enable` or `codex-shim app` — confirm managed provider in `~/.codex/config.toml`.
+2. `codex-shim enable` or `codex-shim app` — confirm `~/.codex/codex-shim.config.toml` and wrapper files exist.
 3. Run `codex-shim patch-app` and launch the **overlay** binary, not only `/opt/codex-desktop`.
 4. Re-patch after upgrading Codex Desktop (JS bundle needles change).
 
@@ -399,8 +407,9 @@ codex-shim model use <slug>
 
 ### Tool calls degrade to plain text
 
-Confirm routing with `tail -f <repo>/.codex-shim/shim.log`. BYOK providers vary in tool-call
-quality; ChatGPT passthrough remains the highest-fidelity path (see upstream README).
+Confirm routing with `tail -f <repo>/.codex-shim/shim.log`. CLIProxyAPI routes vary in
+tool-call quality; ChatGPT passthrough remains the highest-fidelity path when explicitly
+enabled (see upstream README).
 
 ### `patch-app` fails or Desktop crashes after patch
 
@@ -417,7 +426,7 @@ Restore does not delete the overlay directory; it rewinds `app.asar` from the sh
 
 | Topic | Notes |
 |-------|--------|
-| **Codex subagents / `multi_agent`** | Implemented by the Codex app runtime, not `codex-shim`. BYOK routes may return “unsupported call” for subagent tools even when they appear in schema. Enabling `[features].multi_agent` in `~/.codex/config.toml` does not make every upstream execute subagents. |
+| **Codex subagents / `multi_agent`** | Implemented by the Codex app runtime, not `codex-shim`. CLIProxyAPI routes may return “unsupported call” for subagent tools even when they appear in schema. Enabling `[features].multi_agent` in `~/.codex/config.toml` does not make every upstream execute subagents. |
 | **Upstream tool-call quality** | The shim translates API shapes; it cannot force a provider to emit valid tool JSON. |
 | **Non-Linux Desktop builds** | This fork assumes `/opt/codex-desktop` + overlay from `ilysenko/codex-desktop-linux`. Non-Linux package formats belong upstream. |
 | **Internet-exposed shim** | Default bind is loopback; do not expose `:8765` without hardening. |

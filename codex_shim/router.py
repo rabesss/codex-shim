@@ -2,7 +2,7 @@
 
 The Auto Router adds one virtual model (default slug ``codex-auto``) to the
 shim. When Codex sends a request for that slug, the shim asks a small, cheap
-*classifier* model — one of your own configured BYOK models — to score every
+*classifier* model — one of your own configured custom models — to score every
 candidate model on how likely it is to complete *this* task correctly on the
 first try (0.0–1.0). The shim then routes the real request to the **cheapest**
 candidate whose score clears a quality bar (default ``0.7``), so trivial turns

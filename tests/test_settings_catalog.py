@@ -17,6 +17,7 @@ def auth_present(monkeypatch, tmp_path):
     auth = tmp_path / "auth.json"
     auth.write_text(json.dumps({"tokens": {"access_token": "stub", "account_id": "acct"}}))
     monkeypatch.setattr("codex_shim.settings.DEFAULT_CODEX_AUTH", auth)
+    monkeypatch.setenv("CODEX_SHIM_ENABLE_CHATGPT", "1")
     return auth
 
 
@@ -160,20 +161,112 @@ def test_desktop_model_matrix_uses_credentials_and_provider_prefixes(tmp_path):
     rows = {row["slug"]: row for row in payload["models"]}
 
     assert "opencode-go-deepseek-v4-pro" in rows
-    assert rows["opencode-go-deepseek-v4-pro"]["api_key_credential"] == "DROID_BYOK_OPENCODE_GO_API_KEY"
-    assert rows["opencode-go-deepseek-v4-pro"]["provider_display_name"] == "OpenCode Go"
+    assert rows["opencode-go-deepseek-v4-pro"]["api_key_credential"] == "CLIPROXY_INTERNAL_API_KEY"
+    assert rows["opencode-go-deepseek-v4-pro"]["provider_display_name"] == "CLIProxyAPI / OpenCode Go"
+    assert rows["opencode-go-deepseek-v4-pro"]["base_url"] == "http://127.0.0.1:8317/v1"
     assert rows["opencode-go-deepseek-v4-pro"]["max_context_limit"] == 1000000
     assert rows["opencode-go-deepseek-v4-pro"]["no_image_support"] is True
     assert rows["opencode-go-kimi-k2-6"]["no_image_support"] is False
-    assert rows["xiaomi-mimo-v2-5"]["no_image_support"] is True
+    assert rows["opencode-go-mimo-v2-5-pro"]["display_name"] == "MiMo v2.5 Pro"
+    assert rows["opencode-go-mimo-v2-5-pro"]["provider_display_name"] == "CLIProxyAPI / OpenCode Go"
+    assert rows["opencode-go-mimo-v2-5-pro"]["no_image_support"] is True
+    assert rows["opencode-go-mimo-v2-5"]["no_image_support"] is False
+    assert rows["commandcode-mimo-v2-5-pro"]["provider_display_name"] == "CLIProxyAPI / CommandCode"
+    assert rows["commandcode-deepseek-v4-flash"]["provider"] == "generic-chat-completion-api"
+    assert rows["commandcode-deepseek-v4-flash"]["base_url"] == "http://127.0.0.1:8317/v1"
+    assert rows["commandcode-deepseek-v4-flash"]["provider_display_name"] == "CLIProxyAPI / CommandCode"
+    assert rows["commandcode-deepseek-v4-flash"]["api_key_credential"] == "CLIPROXY_INTERNAL_API_KEY"
+    assert rows["commandcode-deepseek-v4-flash"]["no_image_support"] is True
+    assert rows["commandcode-deepseek-v4-flash"]["supports_tools"] is True
+    assert "api_key" not in rows["commandcode-deepseek-v4-flash"]
     assert rows["grok-composer-2-5-fast"]["base_url"] == "http://127.0.0.1:8317/v1"
+    assert rows["grok-4-3"]["provider_display_name"] == "CLIProxyAPI / xAI Grok OAuth"
+    assert rows["grok-4-3"]["supports_reasoning"] is True
     assert "api_key" not in rows["grok-composer-2-5-fast"]
 
     output = write_desktop_models(tmp_path / "models.json")
     loaded = json.loads(output.read_text())
     assert loaded == payload
-    assert "DROID_BYOK_OPENCODE_GO_API_KEY" in output.read_text()
+    assert "CLIPROXY_INTERNAL_API_KEY" in output.read_text()
+    assert "DROID_BYOK_OPENCODE_GO_API_KEY" not in output.read_text()
     assert "sk-" not in output.read_text()
+
+
+def test_desktop_model_matrix_can_use_live_cliproxyapi_discovery():
+    payload = desktop_models_payload(
+        cliproxyapi_models=[
+            {"id": "deepseek/deepseek-v4-flash", "owned_by": "commandcode"},
+            {"id": "grok-4.3", "owned_by": "xai"},
+            {"id": "grok-imagine-image", "owned_by": "xai"},
+            {"id": "commandcode/deepseek/deepseek-v4-pro", "owned_by": "cursor-commandcode"},
+        ]
+    )
+    rows = {row["slug"]: row for row in payload["models"]}
+
+    assert set(rows) == {"commandcode-deepseek-v4-flash", "grok-4-3"}
+    assert rows["commandcode-deepseek-v4-flash"]["model"] == "deepseek/deepseek-v4-flash"
+    assert rows["commandcode-deepseek-v4-flash"]["provider_display_name"] == "CLIProxyAPI / CommandCode"
+    assert rows["grok-4-3"]["no_image_support"] is False
+
+
+def test_catalog_display_names_are_route_first(tmp_path):
+    payload = desktop_models_payload()
+    settings = tmp_path / "models.json"
+    settings.write_text(json.dumps(payload))
+    models = ModelSettings(settings).load()
+    rows = {model.slug: catalog_entry(model) for model in models}
+
+    assert rows["opencode-go-mimo-v2-5-pro"]["display_name"] == "CLIProxyAPI / OpenCode Go / MiMo v2.5 Pro"
+    assert rows["opencode-go-mimo-v2-5-pro"]["input_modalities"] == ["text"]
+    assert rows["minimax-coding-minimax-m3"]["display_name"] == "CLIProxyAPI / MiniMax Coding / MiniMax M3"
+    assert rows["minimax-coding-minimax-m3"]["input_modalities"] == ["text", "image"]
+    assert rows["commandcode-deepseek-v4-flash"]["display_name"] == "CLIProxyAPI / CommandCode / DeepSeek V4 Flash"
+    assert rows["grok-4-3"]["display_name"] == "CLIProxyAPI / xAI Grok OAuth / Grok 4.3"
+    assert rows["grok-4-3"]["supports_reasoning_summaries"] is True
+
+
+def test_write_catalog_keeps_configured_credential_rows_without_shell_secret(tmp_path, auth_missing):
+    settings = tmp_path / "models.json"
+    settings.write_text(json.dumps(desktop_models_payload()))
+    models = ModelSettings(settings).load()
+    catalog_path = tmp_path / "catalog.json"
+
+    write_catalog(models, catalog_path)
+
+    rows = {row["slug"]: row for row in json.loads(catalog_path.read_text())["models"]}
+    assert rows["opencode-go-mimo-v2-5-pro"]["display_name"] == "CLIProxyAPI / OpenCode Go / MiMo v2.5 Pro"
+    assert rows["opencode-go-mimo-v2-5-pro"]["input_modalities"] == ["text"]
+    assert rows["minimax-coding-minimax-m3"]["input_modalities"] == ["text", "image"]
+
+
+def test_commandcode_settings_row_loads_as_cliproxyapi_route(monkeypatch, tmp_path):
+    credential_dir = tmp_path / "credentials"
+    credential_dir.mkdir()
+    (credential_dir / "CLIPROXY_INTERNAL_API_KEY").write_text("cpa-secret\n")
+
+    settings = tmp_path / "settings.json"
+    settings.write_text(
+        json.dumps(
+            {
+                "models": [
+                    {
+                        "slug": "commandcode-deepseek-v4-flash",
+                        "model": "deepseek/deepseek-v4-flash",
+                        "display_name": "DeepSeek V4 Flash",
+                        "provider": "generic-chat-completion-api",
+                        "base_url": "http://127.0.0.1:8317/v1",
+                        "api_key_credential": "CLIPROXY_INTERNAL_API_KEY",
+                    }
+                ]
+            }
+        )
+    )
+
+    monkeypatch.setenv("CREDENTIALS_DIRECTORY", str(credential_dir))
+    [model] = ModelSettings(settings).load()
+
+    assert model.is_openai_chat is True
+    assert model.api_key == "cpa-secret"
 
 
 def test_default_missing_settings_allows_chatgpt_only(monkeypatch, tmp_path):
@@ -223,7 +316,7 @@ def test_cli_load_models_invalid_json_has_actionable_error(tmp_path):
     assert "Settings file is not valid JSON" in str(exc.value)
 
 
-def test_chatgpt_passthrough_available_requires_access_token(tmp_path):
+def test_chatgpt_passthrough_available_requires_explicit_enable_and_access_token(monkeypatch, tmp_path):
     missing = tmp_path / "missing.json"
     assert chatgpt_passthrough_available(missing) is False
     no_tokens = tmp_path / "no-tokens.json"
@@ -234,6 +327,8 @@ def test_chatgpt_passthrough_available_requires_access_token(tmp_path):
     assert chatgpt_passthrough_available(empty_token) is False
     valid = tmp_path / "valid.json"
     valid.write_text(json.dumps({"tokens": {"access_token": "x"}}))
+    assert chatgpt_passthrough_available(valid) is False
+    monkeypatch.setenv("CODEX_SHIM_ENABLE_CHATGPT", "1")
     assert chatgpt_passthrough_available(valid) is True
 
 
@@ -326,7 +421,7 @@ def test_install_and_restore_preserve_displaced_top_level_config(monkeypatch, tm
 
 
 def test_current_managed_model_ignores_user_top_level_and_stale_managed(monkeypatch, tmp_path, auth_missing):
-    config_path = tmp_path / ".codex" / "config.toml"
+    config_path = tmp_path / ".codex" / "codex-shim.config.toml"
     config_path.parent.mkdir()
     config_path.write_text(
         'model = "user-top"\n'
@@ -334,7 +429,7 @@ def test_current_managed_model_ignores_user_top_level_and_stale_managed(monkeypa
         'model = "stale-managed"\n'
         f'{cli.MANAGED_END}\n'
     )
-    monkeypatch.setattr(cli, "CODEX_CONFIG_PATH", config_path)
+    monkeypatch.setattr(cli, "CODEX_SHIM_PROFILE_PATH", config_path)
 
     model = ModelSettingsFixture.one()
     assert cli._current_managed_model() == "stale-managed"
@@ -346,6 +441,27 @@ def test_loopback_no_proxy_adds_upper_and_lowercase_entries():
 
     assert env["NO_PROXY"] == "example.com,localhost,127.0.0.1,::1"
     assert env["no_proxy"] == "127.0.0.1,localhost,::1"
+
+
+def test_profile_cli_wrapper_uses_config_overrides_for_app_server(monkeypatch, tmp_path):
+    monkeypatch.setattr(cli, "CODEX_SHIM_PROFILE_CLI_PATH", tmp_path / "bin" / "codex-shim-profile-codex")
+    monkeypatch.setattr(cli, "CODEX_SHIM_DESKTOP_WRAPPER_PATH", tmp_path / "bin" / "codex-desktop-shim")
+    monkeypatch.setattr(cli, "CATALOG_PATH", Path("/tmp/custom_model_catalog.json"))
+
+    cli._write_profile_wrappers("opencode-go-mimo-v2-5-pro", "CLIProxyAPI / OpenCode Go / MiMo v2.5 Pro", 8765)
+
+    text = cli.CODEX_SHIM_PROFILE_CLI_PATH.read_text()
+    assert "--profile" not in text
+    assert 'model="opencode-go-mimo-v2-5-pro"' in text
+    assert 'model_provider="codex_shim"' in text
+    assert 'model_catalog_json="/tmp/custom_model_catalog.json"' in text
+    assert 'model_providers.codex_shim.name="CLIProxyAPI / OpenCode Go / MiMo v2.5 Pro"' in text
+    assert '"$@"' in text
+
+    desktop_text = cli.CODEX_SHIM_DESKTOP_WRAPPER_PATH.read_text()
+    assert "/home/ravish" not in desktop_text
+    assert "CODEX_SHIM_DESKTOP_APP_DIR" in desktop_text
+    assert "/opt/codex-desktop" in desktop_text
 
 
 def test_patch_app_is_linux_only(monkeypatch, capsys):

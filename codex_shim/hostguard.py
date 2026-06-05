@@ -4,7 +4,7 @@ Binding to 127.0.0.1 keeps the shim off the network, but it does not stop a
 web page the user is already viewing from reaching it. A browser resolves an
 attacker-controlled domain to 127.0.0.1 (DNS rebinding) and then issues
 same-origin requests to the shim; the loopback socket happily accepts them.
-Because the shim forwards each request upstream with the user's BYOK API keys
+Because the shim forwards each request upstream with the user's route API keys
 or ChatGPT access token, an unguarded shim lets any visited page spend the
 user's model credits and read the responses.
 

@@ -40,6 +40,8 @@ def chatgpt_passthrough_available(auth_path: Path | None = None) -> bool:
     """Return True if ~/.codex/auth.json holds a usable Codex access token."""
     if os.environ.get("CODEX_SHIM_DISABLE_CHATGPT", "").lower() in {"1", "true", "yes", "on"}:
         return False
+    if os.environ.get("CODEX_SHIM_ENABLE_CHATGPT", "").lower() not in {"1", "true", "yes", "on"}:
+        return False
     if auth_path is None:
         import sys as _sys
 
@@ -401,8 +403,8 @@ def default_model_slug(models: list[ShimModel], include_chatgpt: bool | None = N
     if cursor_passthrough_available():
         return CURSOR_MODEL_SLUG
     raise ValueError(
-        "No usable codex-shim models: add models to ~/.codex-shim/models.json, run `codex login`, "
-        "run `cursor-agent login`, or unset CODEX_SHIM_DISABLE_CHATGPT / CODEX_SHIM_DISABLE_CURSOR."
+        "No usable codex-shim models: add models to ~/.codex-shim/models.json, run `cursor-agent login`, "
+        "or explicitly set CODEX_SHIM_ENABLE_CHATGPT=1 if you intentionally want ChatGPT passthrough."
     )
 
 
@@ -411,7 +413,7 @@ def usable_byok_models(models: list[ShimModel]) -> list[ShimModel]:
 
 
 def available_model_slugs(models: list[ShimModel]) -> set[str]:
-    """Every model slug the shim can route to right now: usable BYOK models plus
+    """Every model slug the shim can route to right now: usable custom models plus
     any available ChatGPT/Cursor passthrough slugs. Used by the Auto Router to
     keep routing to candidates that actually exist."""
     from .cursor_passthrough import cursor_passthrough_available, cursor_passthrough_display_names

@@ -1,29 +1,141 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
-from typing import Any
+import re
+from typing import Any, Iterable
+from urllib import error, request
 
 
-def desktop_models_payload(*, include_commandcode: bool = True, include_cpa_oauth: bool = True) -> dict[str, Any]:
-    """Return the bundled Linux desktop provider-prefixed model matrix.
+CLIPROXYAPI_BASE_URL = "http://127.0.0.1:8317/v1"
+CLIPROXYAPI_CREDENTIAL = "CLIPROXY_INTERNAL_API_KEY"
+DISCOVERY_TIMEOUT_SECONDS = 2.0
 
-    The generated settings intentionally contain credential names, not secret
-    values. The codex-shim systemd unit should load matching encrypted
-    credentials via LoadCredentialEncrypted=.
+OWNER_LABELS = {
+    "zai-coding": "Z.ai Coding",
+    "minimax-coding": "MiniMax Coding",
+    "opencode-go": "OpenCode Go",
+    "opencode-zen": "OpenCode Zen",
+    "xiaomi-mimo": "Xiaomi MiMo",
+    "crofai": "CrofAI",
+    "commandcode": "CommandCode",
+    "xai": "xAI Grok OAuth",
+}
+
+SKIPPED_DISCOVERY_OWNERS = {
+    # Cursor relay routes are intentionally scoped to Cursor. Codex gets the
+    # underlying CLIProxyAPI provider routes instead.
+    "cursor-commandcode",
+    "cursor-crofai",
+    "cursor-opencode-zen",
+    "cursor-xiaomi-mimo",
+}
+NON_CHAT_MODEL_MARKERS = ("imagine", "image-quality", "video")
+
+BOOTSTRAP_MODELS: tuple[tuple[str, str], ...] = (
+    ("zai-coding", "glm-5.1"),
+    ("zai-coding", "glm-5"),
+    ("zai-coding", "glm-4.7"),
+    ("minimax-coding", "MiniMax-M3"),
+    ("minimax-coding", "MiniMax-M2.7"),
+    ("minimax-coding", "MiniMax-M2.7-highspeed"),
+    ("opencode-go", "deepseek-v4-pro"),
+    ("opencode-go", "deepseek-v4-flash"),
+    ("opencode-go", "kimi-k2.6"),
+    ("opencode-go", "kimi-k2.5"),
+    ("opencode-go", "glm-5.1"),
+    ("opencode-go", "glm-5"),
+    ("opencode-go", "mimo-v2.5-pro"),
+    ("opencode-go", "mimo-v2.5"),
+    ("opencode-go", "minimax-m2.7"),
+    ("opencode-go", "minimax-m2.5"),
+    ("opencode-go", "qwen3.7-max"),
+    ("opencode-go", "qwen3.6-plus"),
+    ("opencode-go", "qwen3.5-plus"),
+    ("opencode-zen", "big-pickle"),
+    ("opencode-zen", "deepseek-v4-flash-free"),
+    ("opencode-zen", "mimo-v2.5-free"),
+    ("opencode-zen", "minimax-m3-free"),
+    ("opencode-zen", "nemotron-3-super-free"),
+    ("crofai", "kimi-k2.6-precision"),
+    ("commandcode", "deepseek/deepseek-v4-pro"),
+    ("commandcode", "deepseek/deepseek-v4-flash"),
+    ("commandcode", "zai-org/GLM-5.1"),
+    ("commandcode", "zai-org/GLM-5"),
+    ("commandcode", "moonshotai/Kimi-K2.6"),
+    ("commandcode", "moonshotai/Kimi-K2.5"),
+    ("commandcode", "MiniMaxAI/MiniMax-M3"),
+    ("commandcode", "MiniMaxAI/MiniMax-M2.7"),
+    ("commandcode", "MiniMaxAI/MiniMax-M2.5"),
+    ("commandcode", "xiaomi/mimo-v2.5-pro"),
+    ("commandcode", "xiaomi/mimo-v2.5"),
+    ("commandcode", "Qwen/Qwen3.7-Max"),
+    ("commandcode", "Qwen/Qwen3.6-Max-Preview"),
+    ("commandcode", "Qwen/Qwen3.6-Plus"),
+    ("commandcode", "stepfun/Step-3.5-Flash"),
+    ("xai", "grok-composer-2.5-fast"),
+    ("xai", "grok-4.3"),
+    ("xai", "grok-4.20-0309-reasoning"),
+    ("xai", "grok-4.20-0309-non-reasoning"),
+    ("xai", "grok-3-mini"),
+    ("xai", "grok-3-mini-fast"),
+)
+
+CAPABILITY_OVERRIDES: dict[tuple[str, str], dict[str, Any]] = {
+    ("zai-coding", "glm-5.1"): {"context": 200_000, "output": 131_072},
+    ("zai-coding", "glm-5"): {"context": 202_752, "output": 131_072},
+    ("zai-coding", "glm-4.7"): {"context": 204_800, "output": 131_072},
+    ("minimax-coding", "MiniMax-M3"): {"context": 512_000, "output": 131_072, "image": True},
+    ("minimax-coding", "MiniMax-M2.7"): {"context": 204_800, "output": 131_072},
+    ("minimax-coding", "MiniMax-M2.7-highspeed"): {"context": 204_800, "output": 131_072},
+    ("opencode-go", "deepseek-v4-pro"): {"context": 1_000_000, "output": 384_000},
+    ("opencode-go", "deepseek-v4-flash"): {"context": 1_000_000, "output": 384_000},
+    ("opencode-go", "kimi-k2.6"): {"context": 262_144, "output": 65_536, "image": True},
+    ("opencode-go", "kimi-k2.5"): {"context": 262_144, "output": 65_536, "image": True},
+    ("opencode-go", "glm-5.1"): {"context": 202_752, "output": 32_768},
+    ("opencode-go", "glm-5"): {"context": 202_752, "output": 32_768},
+    ("opencode-go", "mimo-v2.5-pro"): {"context": 1_048_576, "output": 128_000},
+    ("opencode-go", "mimo-v2.5"): {"context": 1_000_000, "output": 128_000, "image": True},
+    ("opencode-go", "minimax-m2.7"): {"context": 204_800, "output": 131_072},
+    ("opencode-go", "minimax-m2.5"): {"context": 204_800, "output": 65_536},
+    ("opencode-go", "qwen3.7-max"): {"context": 1_000_000, "output": 65_536},
+    ("opencode-go", "qwen3.6-plus"): {"context": 262_144, "output": 65_536},
+    ("opencode-go", "qwen3.5-plus"): {"context": 262_144, "output": 65_536},
+    ("opencode-zen", "minimax-m3-free"): {"context": 200_000, "output": 32_000, "image": True},
+    ("opencode-zen", "nemotron-3-super-free"): {"context": 204_800, "output": 128_000},
+    ("crofai", "kimi-k2.6-precision"): {"context": 262_144, "output": 262_144, "image": True},
+    ("xai", "grok-4.3"): {"context": 1_000_000, "output": 30_000, "image": True, "reasoning": True},
+    ("xai", "grok-4.20-0309-reasoning"): {
+        "context": 2_000_000,
+        "output": 30_000,
+        "image": True,
+        "reasoning": True,
+    },
+    ("xai", "grok-4.20-0309-non-reasoning"): {"context": 2_000_000, "output": 30_000, "image": True},
+}
+
+
+def desktop_models_payload(
+    *,
+    include_commandcode: bool = True,
+    include_cpa_oauth: bool = True,
+    cliproxyapi_models: Iterable[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    """Return a Codex-compatible model matrix backed by CLIProxyAPI.
+
+    CLIProxyAPI owns provider credentials, OAuth-backed routes, and local
+    OpenAI-compatible provider adapters. codex-shim only converts those routes
+    into Codex Desktop/CLI catalog rows and adds Codex capability metadata.
     """
 
-    rows: list[dict[str, Any]] = []
-    rows.extend(_zai_coding_models())
-    rows.extend(_minimax_coding_models())
-    rows.extend(_opencode_go_models())
-    rows.extend(_opencode_zen_models())
-    rows.extend(_xiaomi_token_plan_models())
-    rows.extend(_crofai_models())
-    if include_commandcode:
-        rows.extend(_commandcode_models())
-    if include_cpa_oauth:
-        rows.extend(_cliproxy_oauth_models())
+    discovered = list(cliproxyapi_models) if cliproxyapi_models is not None else discover_cliproxyapi_models()
+    source_rows = discovered or [{"id": model, "owned_by": owner} for owner, model in BOOTSTRAP_MODELS]
+    rows = _cliproxyapi_rows(
+        source_rows,
+        include_commandcode=include_commandcode,
+        include_cpa_oauth=include_cpa_oauth,
+    )
     return {"models": rows}
 
 
@@ -43,311 +155,175 @@ def write_desktop_models(
     return path
 
 
-def _row(
+def discover_cliproxyapi_models(
     *,
-    slug: str,
-    model: str,
-    display_name: str,
-    provider: str,
-    base_url: str,
-    provider_display_name: str,
-    credential: str | None,
-    context: int,
-    output: int,
-    image: bool,
-    index: int,
-    extra_headers: dict[str, str] | None = None,
-) -> dict[str, Any]:
-    row: dict[str, Any] = {
-        "slug": slug,
-        "model": model,
-        "display_name": display_name,
-        "provider": provider,
-        "provider_display_name": provider_display_name,
-        "base_url": base_url,
-        "max_context_limit": context,
-        "max_output_tokens": output,
-        "auto_compact_token_limit": max(8_000, int(context * 0.82)),
-        "truncation_limit": min(128_000, max(16_000, int(context * 0.22))),
-        "no_image_support": not image,
+    base_url: str = CLIPROXYAPI_BASE_URL,
+    api_key: str | None = None,
+    timeout: float = DISCOVERY_TIMEOUT_SECONDS,
+) -> list[dict[str, Any]]:
+    api_key = (api_key if api_key is not None else os.environ.get(CLIPROXYAPI_CREDENTIAL, "")).strip()
+    if not api_key:
+        return []
+    url = base_url.rstrip("/") + "/models"
+    req = request.Request(
+        url,
+        headers={
+            "Accept": "application/json",
+            "Authorization": f"Bearer {api_key}",
+        },
+    )
+    try:
+        with request.urlopen(req, timeout=timeout) as resp:
+            payload = json.loads(resp.read().decode("utf-8"))
+    except (OSError, error.URLError, TimeoutError, json.JSONDecodeError):
+        return []
+    data = payload.get("data") if isinstance(payload, dict) else None
+    if not isinstance(data, list):
+        return []
+    rows: list[dict[str, Any]] = []
+    for item in data:
+        if not isinstance(item, dict):
+            continue
+        model_id = str(item.get("id") or "").strip()
+        if not model_id:
+            continue
+        rows.append({"id": model_id, "owned_by": str(item.get("owned_by") or "cliproxyapi").strip()})
+    return rows
+
+
+def _cliproxyapi_rows(
+    rows: Iterable[dict[str, Any]],
+    *,
+    include_commandcode: bool,
+    include_cpa_oauth: bool,
+) -> list[dict[str, Any]]:
+    generated: list[dict[str, Any]] = []
+    seen_slugs: set[str] = set()
+    for index, row in enumerate(rows):
+        model_id = str(row.get("id") or row.get("model") or "").strip()
+        owner = str(row.get("owned_by") or row.get("owner") or "cliproxyapi").strip() or "cliproxyapi"
+        if (
+            not model_id
+            or not _include_owner(owner, include_commandcode=include_commandcode, include_cpa_oauth=include_cpa_oauth)
+            or not _looks_like_chat_model(model_id)
+        ):
+            continue
+        generated_row = _row_from_cliproxyapi(owner=owner, model_id=model_id, index=index)
+        slug = generated_row["slug"]
+        if slug in seen_slugs:
+            slug = f"{slug}-{index}"
+            generated_row["slug"] = slug
+        seen_slugs.add(slug)
+        generated.append(generated_row)
+    return generated
+
+
+def _include_owner(owner: str, *, include_commandcode: bool, include_cpa_oauth: bool) -> bool:
+    normalized = owner.strip().lower()
+    if normalized in SKIPPED_DISCOVERY_OWNERS:
+        return False
+    if not include_commandcode and normalized == "commandcode":
+        return False
+    if not include_cpa_oauth and normalized == "xai":
+        return False
+    return True
+
+
+def _looks_like_chat_model(model_id: str) -> bool:
+    lower = model_id.lower()
+    return not any(marker in lower for marker in NON_CHAT_MODEL_MARKERS)
+
+
+def _row_from_cliproxyapi(*, owner: str, model_id: str, index: int) -> dict[str, Any]:
+    caps = _capabilities(owner, model_id)
+    route_label = OWNER_LABELS.get(owner, _label_from_slug(owner))
+    return {
+        "slug": _route_slug(owner, model_id),
+        "model": model_id,
+        "display_name": _display_name(owner, model_id),
+        "provider": "generic-chat-completion-api",
+        "provider_display_name": f"CLIProxyAPI / {route_label}",
+        "base_url": CLIPROXYAPI_BASE_URL,
+        "api_key_credential": CLIPROXYAPI_CREDENTIAL,
+        "max_context_limit": caps["context"],
+        "max_output_tokens": caps["output"],
+        "auto_compact_token_limit": max(8_000, int(caps["context"] * 0.82)),
+        "truncation_limit": min(128_000, max(16_000, int(caps["context"] * 0.22))),
+        "no_image_support": not caps["image"],
+        "supports_tools": caps["tools"],
+        "supports_reasoning": caps["reasoning"],
+        "supports_streaming": caps["streaming"],
         "index": index,
-        "generated_by": "codex-shim-desktop-matrix",
+        "generated_by": "codex-shim-cliproxyapi-discovery",
     }
-    if credential:
-        row["api_key_credential"] = credential
-    else:
-        row["api_key"] = "dummy"
-    if extra_headers:
-        row["extra_headers"] = dict(extra_headers)
-    return row
 
 
-def _zai_coding_models() -> list[dict[str, Any]]:
-    base = "https://api.z.ai/api/coding/paas/v4"
-    credential = "DROID_BYOK_ZAI_CODING_API_KEY"
-    provider = "Z.ai Coding"
-    return [
-        _row(
-            slug="zai-glm-5-1",
-            model="glm-5.1",
-            display_name="GLM 5.1",
-            provider="generic-chat-completion-api",
-            base_url=base,
-            provider_display_name=provider,
-            credential=credential,
-            context=200_000,
-            output=131_072,
-            image=False,
-            index=10,
-        ),
-        _row(
-            slug="zai-glm-5",
-            model="glm-5",
-            display_name="GLM 5",
-            provider="generic-chat-completion-api",
-            base_url=base,
-            provider_display_name=provider,
-            credential=credential,
-            context=202_752,
-            output=131_072,
-            image=False,
-            index=11,
-        ),
-        _row(
-            slug="zai-glm-4-7",
-            model="glm-4.7",
-            display_name="GLM 4.7",
-            provider="generic-chat-completion-api",
-            base_url=base,
-            provider_display_name=provider,
-            credential=credential,
-            context=204_800,
-            output=131_072,
-            image=False,
-            index=12,
-        ),
-    ]
+def _capabilities(owner: str, model_id: str) -> dict[str, Any]:
+    caps = {
+        "context": 128_000,
+        "output": 32_768,
+        "image": False,
+        "tools": True,
+        "reasoning": False,
+        "streaming": True,
+    }
+    if owner == "xai":
+        caps.update({"context": 200_000, "output": 30_000, "image": model_id.startswith("grok-4")})
+    caps.update(CAPABILITY_OVERRIDES.get((owner, model_id), {}))
+    return caps
 
 
-def _minimax_coding_models() -> list[dict[str, Any]]:
-    credential = "DROID_BYOK_MINIMAX_API_KEY"
-    return [
-        _row(
-            slug="minimax-m3",
-            model="MiniMax-M3",
-            display_name="MiniMax M3",
-            provider="generic-chat-completion-api",
-            base_url="https://api.minimax.io/v1",
-            provider_display_name="MiniMax Coding",
-            credential=credential,
-            context=512_000,
-            output=131_072,
-            image=True,
-            index=20,
-        ),
-        _row(
-            slug="minimax-m2-7",
-            model="MiniMax-M2.7",
-            display_name="MiniMax M2.7",
-            provider="generic-chat-completion-api",
-            base_url="https://api.minimax.io/v1",
-            provider_display_name="MiniMax Coding",
-            credential=credential,
-            context=204_800,
-            output=131_072,
-            image=False,
-            index=21,
-        ),
-        _row(
-            slug="minimax-m2-7-highspeed",
-            model="MiniMax-M2.7-highspeed",
-            display_name="MiniMax M2.7 Highspeed",
-            provider="generic-chat-completion-api",
-            base_url="https://api.minimax.io/v1",
-            provider_display_name="MiniMax Coding",
-            credential=credential,
-            context=204_800,
-            output=131_072,
-            image=False,
-            index=22,
-        ),
-    ]
+def _route_slug(owner: str, model_id: str) -> str:
+    model_slug = _slugify(model_id.rsplit("/", 1)[-1])
+    owner_slug = _slugify(owner)
+    if owner == "xai" and model_slug.startswith("grok-"):
+        return model_slug
+    return f"{owner_slug}-{model_slug}"
 
 
-def _opencode_go_models() -> list[dict[str, Any]]:
-    base = "https://opencode.ai/zen/go/v1"
-    credential = "DROID_BYOK_OPENCODE_GO_API_KEY"
-    specs = [
-        ("opencode-go-deepseek-v4-pro", "deepseek-v4-pro", "DeepSeek V4 Pro", "generic-chat-completion-api", 1_000_000, 384_000, False),
-        ("opencode-go-deepseek-v4-flash", "deepseek-v4-flash", "DeepSeek V4 Flash", "generic-chat-completion-api", 1_000_000, 384_000, False),
-        ("opencode-go-kimi-k2-6", "kimi-k2.6", "Kimi K2.6", "generic-chat-completion-api", 262_144, 65_536, True),
-        ("opencode-go-kimi-k2-5", "kimi-k2.5", "Kimi K2.5", "generic-chat-completion-api", 262_144, 65_536, True),
-        ("opencode-go-glm-5-1", "glm-5.1", "GLM 5.1", "generic-chat-completion-api", 202_752, 32_768, False),
-        ("opencode-go-glm-5", "glm-5", "GLM 5", "generic-chat-completion-api", 202_752, 32_768, False),
-        ("opencode-go-mimo-v2-5-pro", "mimo-v2.5-pro", "MiMo v2.5 Pro", "generic-chat-completion-api", 1_048_576, 128_000, False),
-        ("opencode-go-mimo-v2-5", "mimo-v2.5", "MiMo v2.5", "generic-chat-completion-api", 1_000_000, 128_000, True),
-        ("opencode-go-minimax-m3", "minimax-m3", "MiniMax M3", "anthropic", 512_000, 131_072, True),
-        ("opencode-go-minimax-m2-7", "minimax-m2.7", "MiniMax M2.7", "anthropic", 204_800, 131_072, False),
-        ("opencode-go-minimax-m2-5", "minimax-m2.5", "MiniMax M2.5", "anthropic", 204_800, 65_536, False),
-        ("opencode-go-qwen3-7-max", "qwen3.7-max", "Qwen3.7 Max", "anthropic", 1_000_000, 65_536, False),
-        ("opencode-go-qwen3-6-plus", "qwen3.6-plus", "Qwen3.6 Plus", "anthropic", 262_144, 65_536, False),
-    ]
-    return [
-        _row(
-            slug=slug,
-            model=model,
-            display_name=display_name,
-            provider=provider,
-            base_url=base,
-            provider_display_name="OpenCode Go",
-            credential=credential,
-            context=context,
-            output=output,
-            image=image,
-            index=100 + i,
-        )
-        for i, (slug, model, display_name, provider, context, output, image) in enumerate(specs)
-    ]
+def _display_name(owner: str, model_id: str) -> str:
+    value = model_id.rsplit("/", 1)[-1]
+    if owner == "xai":
+        value = model_id
+    return _label_from_slug(value)
 
 
-def _opencode_zen_models() -> list[dict[str, Any]]:
-    base = "https://opencode.ai/zen/v1"
-    credential = "DROID_BYOK_OPENCODE_GO_API_KEY"
-    specs = [
-        ("opencode-zen-big-pickle", "big-pickle", "Big Pickle", "generic-chat-completion-api", 200_000, 32_000, False),
-        ("opencode-zen-deepseek-v4-flash-free", "deepseek-v4-flash-free", "DeepSeek V4 Flash Free", "generic-chat-completion-api", 200_000, 128_000, False),
-        ("opencode-zen-minimax-m3-free", "minimax-m3-free", "MiniMax M3 Free", "anthropic", 200_000, 32_000, True),
-        ("opencode-zen-mimo-v2-5-free", "mimo-v2.5-free", "MiMo v2.5 Free", "generic-chat-completion-api", 200_000, 32_000, True),
-        ("opencode-zen-nemotron-3-super-free", "nemotron-3-super-free", "Nemotron 3 Super Free", "generic-chat-completion-api", 204_800, 128_000, False),
-    ]
-    return [
-        _row(
-            slug=slug,
-            model=model,
-            display_name=display_name,
-            provider=provider,
-            base_url=base,
-            provider_display_name="OpenCode Zen",
-            credential=credential,
-            context=context,
-            output=output,
-            image=image,
-            index=200 + i,
-        )
-        for i, (slug, model, display_name, provider, context, output, image) in enumerate(specs)
-    ]
+def _label_from_slug(value: str) -> str:
+    words = re.split(r"[-_]+", value.strip())
+    return " ".join(_format_word(word) for word in words if word)
 
 
-def _xiaomi_token_plan_models() -> list[dict[str, Any]]:
-    base = "https://token-plan-sgp.xiaomimimo.com/v1"
-    credential = "XIAOMI_MIMO_TOKEN_PLAN_API_KEY"
-    return [
-        _row(
-            slug="xiaomi-mimo-v2-5-pro",
-            model="mimo-v2.5-pro",
-            display_name="Xiaomi MiMo v2.5 Pro",
-            provider="generic-chat-completion-api",
-            base_url=base,
-            provider_display_name="Xiaomi Token Plan",
-            credential=credential,
-            context=1_048_576,
-            output=131_072,
-            image=False,
-            index=300,
-        ),
-        _row(
-            slug="xiaomi-mimo-v2-5",
-            model="mimo-v2.5",
-            display_name="Xiaomi MiMo v2.5",
-            provider="generic-chat-completion-api",
-            base_url=base,
-            provider_display_name="Xiaomi Token Plan",
-            credential=credential,
-            context=1_048_576,
-            output=131_072,
-            image=False,
-            index=301,
-        ),
-    ]
+def _format_word(word: str) -> str:
+    lower = word.lower()
+    if lower in {"ai", "api", "cli", "oauth"}:
+        return lower.upper()
+    if lower == "zai":
+        return "Z.ai"
+    if lower == "xai":
+        return "xAI"
+    if lower == "glm":
+        return "GLM"
+    if lower == "mimo":
+        return "MiMo"
+    if lower == "minimax":
+        return "MiniMax"
+    if lower == "deepseek":
+        return "DeepSeek"
+    if lower == "qwen":
+        return "Qwen"
+    if lower == "kimi":
+        return "Kimi"
+    if lower == "grok":
+        return "Grok"
+    if re.fullmatch(r"v2(?:\.\d+)?", lower):
+        return lower
+    if re.fullmatch(r"[vmkq]\d+(?:\.\d+)?", lower):
+        return lower.upper()
+    if re.fullmatch(r"qwen\d+(?:\.\d+)?", lower):
+        return "Qwen" + lower[4:]
+    return word[:1].upper() + word[1:]
 
 
-def _crofai_models() -> list[dict[str, Any]]:
-    base = "https://crof.ai/v1"
-    credential = "CROFAI_API_KEY"
-    specs = [
-        ("crof-kimi-k2-6-precision", "kimi-k2.6-precision", "Kimi K2.6 Precision", 262_144, 262_144, True),
-        ("crof-deepseek-v4-pro", "deepseek-v4-pro", "DeepSeek V4 Pro", 1_000_000, 131_072, False),
-        ("crof-glm-5-1", "glm-5.1", "GLM 5.1", 202_752, 202_752, False),
-    ]
-    return [
-        _row(
-            slug=slug,
-            model=model,
-            display_name=display_name,
-            provider="generic-chat-completion-api",
-            base_url=base,
-            provider_display_name="CrofAI",
-            credential=credential,
-            context=context,
-            output=output,
-            image=image,
-            index=400 + i,
-        )
-        for i, (slug, model, display_name, context, output, image) in enumerate(specs)
-    ]
-
-
-def _commandcode_models() -> list[dict[str, Any]]:
-    base = "http://127.0.0.1:8318/v1"
-    specs = [
-        ("commandcode-deepseek-v4-pro", "deepseek/deepseek-v4-pro", "DeepSeek V4 Pro", "CommandCode/DeepSeek"),
-        ("commandcode-deepseek-v4-flash", "deepseek/deepseek-v4-flash", "DeepSeek V4 Flash", "CommandCode/DeepSeek"),
-        ("commandcode-glm-5-1", "zai-org/GLM-5.1", "GLM 5.1", "CommandCode/Z.ai"),
-        ("commandcode-kimi-k2-6", "moonshotai/Kimi-K2.6", "Kimi K2.6", "CommandCode/Moonshot"),
-        ("commandcode-minimax-m3", "MiniMaxAI/MiniMax-M3", "MiniMax M3", "CommandCode/MiniMax"),
-        ("commandcode-mimo-v2-5-pro", "xiaomi/mimo-v2.5-pro", "Xiaomi MiMo v2.5 Pro", "CommandCode/Xiaomi"),
-        ("commandcode-qwen3-7-max", "Qwen/Qwen3.7-Max", "Qwen3.7 Max", "CommandCode/Qwen"),
-        ("commandcode-step-3-5-flash", "stepfun/Step-3.5-Flash", "Step 3.5 Flash", "CommandCode/StepFun"),
-    ]
-    return [
-        _row(
-            slug=slug,
-            model=model,
-            display_name=display_name,
-            provider="generic-chat-completion-api",
-            base_url=base,
-            provider_display_name=provider_name,
-            credential=None,
-            context=128_000,
-            output=32_768,
-            image=False,
-            index=500 + i,
-        )
-        for i, (slug, model, display_name, provider_name) in enumerate(specs)
-    ]
-
-
-def _cliproxy_oauth_models() -> list[dict[str, Any]]:
-    base = "http://127.0.0.1:8317/v1"
-    credential = "CLIPROXY_INTERNAL_API_KEY"
-    specs = [
-        ("grok-composer-2-5-fast", "grok-composer-2.5-fast", "Grok Composer 2.5 Fast", 200_000, 30_000, False),
-        ("grok-4-3", "grok-4.3", "Grok 4.3", 1_000_000, 30_000, True),
-        ("grok-4-20-reasoning", "grok-4.20-0309-reasoning", "Grok 4.20 Reasoning", 2_000_000, 30_000, True),
-    ]
-    return [
-        _row(
-            slug=slug,
-            model=model,
-            display_name=display_name,
-            provider="generic-chat-completion-api",
-            base_url=base,
-            provider_display_name="CLIProxyAPI/xAI Grok CLI",
-            credential=credential,
-            context=context,
-            output=output,
-            image=image,
-            index=600 + i,
-        )
-        for i, (slug, model, display_name, context, output, image) in enumerate(specs)
-    ]
+def _slugify(value: str) -> str:
+    slug = re.sub(r"[^a-zA-Z0-9]+", "-", value.strip().lower()).strip("-")
+    return slug or "model"

@@ -1,4 +1,4 @@
-# Fork maintenance: Linux desktop provider bridge
+# Fork maintenance: Linux desktop CLIProxyAPI bridge
 
 Maintainer notes for **this repository**, rebased onto upstream
 **[0xSero/codex-shim](https://github.com/0xSero/codex-shim)** (`origin` → `origin/main`).
@@ -29,13 +29,13 @@ git diff origin/main...HEAD -- ':!*.md' ':!docs/*'
 
 | File | Change |
 |------|--------|
-| `codex_shim/desktop_models.py` | **New.** Bundled `models.json` matrix (`desktop_models_payload`, `write_desktop_models`). |
+| `codex_shim/desktop_models.py` | **New.** CLIProxyAPI discovery/bootstrap `models.json` matrix (`desktop_models_payload`, `write_desktop_models`). |
 | `codex_shim/cli.py` | `desktop write-models`; Linux `patch-app` / `restore-app`; multi-variant Desktop JS needles; health check timeout 3s. |
 | `codex_shim/settings.py` | `api_key_env`, `api_key_credential`, `api_key_file`; `$CREDENTIALS_DIRECTORY` + env fallback; `auto_compact_token_limit`, `truncation_limit`; no silent Cursor key fallback on empty `api_key`. |
-| `codex_shim/catalog.py` | Provider suffix on `display_name`; `provider_display_name` from settings; CommandCode/CLIProxyAPI labels from `base_url`; reasoning summary defaults. |
-| `codex_shim/server.py` | Credential error text; versioned `/vN` base URL join. |
-| `tests/test_settings_catalog.py` | Desktop matrix, credentials, catalog labels, Linux bundle patch tests. |
-| `tests/test_server.py` | Minor server test adjustment. |
+| `codex_shim/catalog.py` | Route-first `Provider / Model` `display_name`; `provider_display_name` from CLIProxyAPI route metadata; capability flags for image/tool/reasoning surfaces. |
+| `codex_shim/server.py` | Credential error text; versioned `/vN` base URL join. Provider-specific adapters remain in CLIProxyAPI. |
+| `tests/test_settings_catalog.py` | CLIProxyAPI matrix, credentials, catalog labels, Linux bundle patch tests, discovery filtering. |
+| `tests/test_server.py` | Upstream Responses/chat routing tests. |
 
 **Documentation on the fork branch:** `README.md` (fork identity / delta), `docs/linux-desktop.md`, `docs/FORK.md`.
 
@@ -43,17 +43,17 @@ git diff origin/main...HEAD -- ':!*.md' ':!docs/*'
 
 | Area | Maintainer note |
 |------|-----------------|
-| Matrix | `codex-shim desktop write-models` → default `~/.codex-shim/models.json`; optional `--no-commandcode`, `--no-cpa-oauth`. |
-| Matrix source | Provider families and slug policy live in `desktop_models.py`; user-facing route table → [`linux-desktop.md`](linux-desktop.md). |
-| Credentials | Rows use `api_key_credential` names; CommandCode uses `api_key: "dummy"`. User setup → [`linux-desktop.md`](linux-desktop.md). |
+| Matrix | `codex-shim desktop write-models` → default `~/.codex-shim/models.json`; live CLIProxyAPI discovery when `CLIPROXY_INTERNAL_API_KEY` is in the environment; bootstrap fallback otherwise. |
+| Matrix source | CLIProxyAPI `/v1/models` is the source of truth. `desktop_models.py` owns slug cleanup and Codex capability overrides only. |
+| Credentials | Generated rows use `api_key_credential: CLIPROXY_INTERNAL_API_KEY`; provider keys stay in CLIProxyAPI. User setup → [`linux-desktop.md`](linux-desktop.md). |
 | Desktop picker | Linux-only `patch-app` / `restore-app` for the `codex-desktop-linux` overlay (`CODEX_DESKTOP_LINUX_*` env overrides). |
-| Catalog | Picker labels gain ` - Provider` suffix; compaction/truncation limits from settings. |
+| Catalog | Picker labels use route-first `Provider / Model` names; compaction/truncation limits from settings. |
 
 ## CLI surface (fork-specific)
 
 | Command | Purpose |
 |---------|---------|
-| `codex-shim desktop write-models` | Write bundled matrix (`--output`, `--no-commandcode`, `--no-cpa-oauth`). |
+| `codex-shim desktop write-models` | Write CLIProxyAPI-backed matrix (`--output`, `--no-commandcode`, `--no-cpa-oauth`). |
 | `codex-shim patch-app` | Refresh and patch Linux overlay from `/opt/codex-desktop`. |
 | `codex-shim restore-app` | Restore Linux overlay `app.asar` from shim backup. |
 
@@ -74,9 +74,9 @@ codex-shim status
 
 After changing `desktop_models.py`:
 
-1. Regenerate local `models.json` on deploy machines (never commit secrets).
+1. Regenerate local `models.json` on deploy machines (never commit secrets). Use a CLIProxyAPI internal key in the environment when you want live discovery.
 2. Run `test_desktop_model_matrix_*` and catalog tests in `tests/test_settings_catalog.py`.
-3. Smoke one slug per route class: direct BYOK, `commandcode-*`, `grok-*`, plus one vision row if `no_image_support` changed.
+3. Smoke one slug per CLIProxyAPI route family: `opencode-go-*`, `commandcode-*`, `grok-*`, plus one vision row if `no_image_support` changed.
 
 End-user deploy steps: [`linux-desktop.md`](linux-desktop.md).
 

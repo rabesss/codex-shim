@@ -12,7 +12,6 @@ from .settings import (
     chatgpt_passthrough_available,
     default_model_slug,
     load_chatgpt_passthrough_catalog_models,
-    usable_byok_models,
 )
 from .cursor_passthrough import cursor_catalog_entry, cursor_passthrough_available
 
@@ -34,11 +33,14 @@ def catalog_entry(model: ShimModel) -> dict:
     compact = model.auto_compact_token_limit or max(8_000, int(context * 0.8))
     truncation = model.truncation_limit or min(64_000, max(8_000, int(context * 0.32)))
     reasoning = _reasoning_effort(model)
-    visual_name = _with_provider_suffix(model.display_name, _provider_label(model))
+    supports_reasoning = _raw_bool(model, "supports_reasoning", default=True)
+    supports_tools = _raw_bool(model, "supports_tools", default=True)
+    provider_label = _provider_label(model)
+    visual_name = _with_provider_prefix(model.display_name, provider_label)
     return {
         "slug": model.slug,
         "display_name": visual_name,
-        "description": f"{model.display_name} via {visual_name.removeprefix(model.display_name).removeprefix(' - ') or 'local Codex shim'}.",
+        "description": f"{model.display_name} via {provider_label or 'local Codex shim'}.",
         "context_window": context,
         "max_context_window": context,
         "auto_compact_token_limit": compact,
@@ -50,15 +52,15 @@ def catalog_entry(model: ShimModel) -> dict:
             {"effort": "high", "description": "Deeper reasoning"},
             {"effort": "xhigh", "description": "Maximum reasoning where supported"},
         ],
-        "default_reasoning_summary": "auto",
+        "default_reasoning_summary": "auto" if supports_reasoning else "none",
         "reasoning_summary_format": "experimental",
-        "supports_reasoning_summaries": True,
+        "supports_reasoning_summaries": supports_reasoning,
         "default_verbosity": "low",
         "support_verbosity": False,
         "apply_patch_tool_type": "freeform",
         "web_search_tool_type": "text_and_image",
         "supports_search_tool": False,
-        "supports_parallel_tool_calls": True,
+        "supports_parallel_tool_calls": supports_tools,
         "experimental_supported_tools": [],
         "input_modalities": ["text"] if model.no_image_support else ["text", "image"],
         "supports_image_detail_original": not model.no_image_support,
@@ -71,7 +73,7 @@ def catalog_entry(model: ShimModel) -> dict:
         "priority": max(1, 1000 - model.index),
         "prefer_websockets": False,
         "available_in_plans": PLAN_TIERS,
-        "base_instructions": "You are a coding agent running in Codex through a local BYOK shim.",
+        "base_instructions": "You are a coding agent running in Codex through a local custom-model shim.",
         "model_messages": {
             "instructions_template": (
                 "You are Codex running on {model_name} through a local all-model shim. "
@@ -88,7 +90,7 @@ def chatgpt_passthrough_entries() -> list[dict]:
     for raw in load_chatgpt_passthrough_catalog_models():
         entry = dict(raw)
         display_name = str(entry.get("display_name") or entry.get("slug") or "ChatGPT")
-        entry["display_name"] = _with_provider_suffix(display_name, "ChatGPT/OpenAI")
+        entry["display_name"] = _with_provider_prefix(display_name, "ChatGPT/OpenAI")
         entry["visibility"] = "list"
         entry.setdefault("available_in_plans", PLAN_TIERS)
         entry.setdefault("minimal_client_version", "0.0.1")
@@ -117,10 +119,14 @@ def write_catalog(models: list[ShimModel], path: Path, router_config=None) -> Pa
         entries.extend(chatgpt_passthrough_entries())
     if cursor_passthrough_available():
         entry = cursor_catalog_entry()
-        entry["display_name"] = _with_provider_suffix(str(entry.get("display_name") or "Composer 2.5"), "Cursor")
+        entry["display_name"] = _with_provider_prefix(str(entry.get("display_name") or "Composer 2.5"), "Cursor")
         entry["isDefault"] = not chatgpt_passthrough_available()
         entries.append(entry)
-    entries.extend(catalog_entry(model) for model in usable_byok_models(models))
+    # Catalog generation can run from a normal shell while provider credentials
+    # are only available to codex-shim.service through LoadCredentialEncrypted.
+    # Keep configured routes visible in Desktop; request-time routing still
+    # enforces credential availability and reports clear missing-key errors.
+    entries.extend(catalog_entry(model) for model in models)
     payload = {"models": entries}
     path.write_text(json.dumps(payload, indent=2, sort_keys=False) + "\n")
     return path
@@ -177,6 +183,8 @@ def _default_context(model: ShimModel) -> int:
 
 
 def _reasoning_effort(model: ShimModel) -> str:
+    if not _raw_bool(model, "supports_reasoning", default=True):
+        return "low"
     lower = model.display_name.lower()
     if "xhigh" in lower or "x-high" in lower:
         return "xhigh"
@@ -189,13 +197,25 @@ def _reasoning_effort(model: ShimModel) -> str:
     return "medium"
 
 
-def _with_provider_suffix(display_name: str, provider_label: str) -> str:
+def _raw_bool(model: ShimModel, key: str, *, default: bool) -> bool:
+    value = model.raw.get(key)
+    if value is None:
+        camel = key.split("_")[0] + "".join(part[:1].upper() + part[1:] for part in key.split("_")[1:])
+        value = model.raw.get(camel)
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return value.strip().lower() in {"1", "true", "yes", "on"}
+    return default
+
+
+def _with_provider_prefix(display_name: str, provider_label: str) -> str:
     if not provider_label:
         return display_name
-    suffix = f" - {provider_label}"
-    if display_name.endswith(suffix):
+    prefix = f"{provider_label} / "
+    if display_name.startswith(prefix):
         return display_name
-    return f"{display_name}{suffix}"
+    return f"{provider_label} / {display_name}"
 
 
 def _provider_label(model: ShimModel) -> str:
@@ -210,8 +230,6 @@ def _provider_label(model: ShimModel) -> str:
         return configured
 
     upstream = _upstream_provider_label(model.model)
-    if "127.0.0.1:8318" in model.base_url:
-        return f"CommandCode/{upstream}" if upstream else "CommandCode"
     if "127.0.0.1:8317" in model.base_url:
         return f"CLIProxyAPI/{upstream}" if upstream else "CLIProxyAPI"
     if upstream:

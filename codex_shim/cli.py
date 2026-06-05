@@ -4,6 +4,7 @@ import argparse
 import os
 from pathlib import Path
 import signal
+import shlex
 import subprocess
 import sys
 import time
@@ -46,6 +47,10 @@ PID_PATH = RUNTIME_DIR / "shim.pid"
 LOG_PATH = RUNTIME_DIR / "shim.log"
 CODEX_CONFIG_PATH = Path.home() / ".codex" / "config.toml"
 CODEX_CONFIG_BACKUP_PATH = RUNTIME_DIR / "config.toml.before-codex-shim"
+CODEX_SHIM_PROFILE_NAME = "codex-shim"
+CODEX_SHIM_PROFILE_PATH = Path.home() / ".codex" / f"{CODEX_SHIM_PROFILE_NAME}.config.toml"
+CODEX_SHIM_PROFILE_CLI_PATH = Path.home() / ".local" / "bin" / "codex-shim-profile-codex"
+CODEX_SHIM_DESKTOP_WRAPPER_PATH = Path.home() / ".local" / "bin" / "codex-desktop-shim"
 MANAGED_BEGIN = "# >>> codex-shim managed >>>"
 MANAGED_END = "# <<< codex-shim managed <<<"
 PREVIOUS_TOP_LEVEL_PREFIX = "# codex-shim previous-top-level = "
@@ -119,10 +124,10 @@ def main(argv: list[str] | None = None) -> int:
 
     desktop_parser = sub.add_parser("desktop", help="Linux Codex Desktop model matrix helpers.")
     desktop_sub = desktop_parser.add_subparsers(dest="desktop_command", required=True)
-    desktop_write = desktop_sub.add_parser("write-models", help="Write provider-prefixed models.json for Desktop.")
+    desktop_write = desktop_sub.add_parser("write-models", help="Write CLIProxyAPI-backed models.json for Desktop.")
     desktop_write.add_argument("--output", type=Path, default=DEFAULT_SETTINGS)
-    desktop_write.add_argument("--no-commandcode", action="store_true", help="Omit direct CommandCode adapter routes.")
-    desktop_write.add_argument("--no-cpa-oauth", action="store_true", help="Omit CPA-backed OAuth-only routes such as Grok CLI.")
+    desktop_write.add_argument("--no-commandcode", action="store_true", help="Omit CLIProxyAPI CommandCode routes.")
+    desktop_write.add_argument("--no-cpa-oauth", action="store_true", help="Omit CLIProxyAPI OAuth-only routes such as Grok CLI.")
 
     args = parser.parse_args(argv)
     if args.command == "generate":
@@ -134,11 +139,12 @@ def main(argv: list[str] | None = None) -> int:
         generate(args.settings, args.port)
         code = start(args.settings, args.port)
         if code == 0 and args.command == "enable":
-            install_codex_config(args.settings, args.port)
+            install_codex_profile_config(args.settings, args.port)
         return code
     if args.command in {"stop", "disable"}:
         if args.command == "disable":
             restore_codex_config()
+            remove_codex_profile_config()
         return stop()
     if args.command == "restart":
         stop()
@@ -156,8 +162,8 @@ def main(argv: list[str] | None = None) -> int:
         if args.model_command == "use":
             generate(args.settings, args.port)
             ensure_started(args.settings, args.port)
-            install_codex_config(args.settings, args.port, args.model_slug)
-            print(f"Active Codex shim model: {args.model_slug}")
+            install_codex_profile_config(args.settings, args.port, args.model_slug)
+            print(f"Active Codex shim profile model: {args.model_slug}")
             return 0
     if args.command == "codex":
         generate(args.settings, args.port)
@@ -167,8 +173,8 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "app":
         generate(args.settings, args.port)
         ensure_started(args.settings, args.port)
-        install_codex_config(args.settings, args.port, args.model_slug)
-        exec_codex_app(args.settings, args.port, args.path)
+        install_codex_profile_config(args.settings, args.port, args.model_slug)
+        exec_codex_app(args.settings, args.port, args.path, shim_profile=True)
         return 0
     if args.command == "desktop" and args.desktop_command == "write-models":
         output = write_desktop_models(
@@ -242,6 +248,23 @@ def install_codex_config(settings_path: Path, port: int, model_slug: str | None 
     )
     CODEX_CONFIG_PATH.write_text(top_block + "\n" + cleaned.lstrip() + "\n" + provider_block)
     print(f"Installed shim config into {CODEX_CONFIG_PATH}.")
+
+
+def install_codex_profile_config(settings_path: Path, port: int, model_slug: str | None = None) -> None:
+    models = _load_models(settings_path)
+    router_config = _active_router(models, settings_path)
+    default_slug = _resolve_model_slug(models, model_slug, router_config)
+    CODEX_SHIM_PROFILE_PATH.parent.mkdir(parents=True, exist_ok=True)
+    provider_name = _provider_display_name(models, default_slug, router_config)
+    top_block, provider_block = _managed_config_blocks(
+        default_slug,
+        port,
+        previous_top_level=None,
+        provider_name=provider_name,
+    )
+    CODEX_SHIM_PROFILE_PATH.write_text(top_block + "\n" + provider_block)
+    _write_profile_wrappers(default_slug, provider_name, port)
+    print(f"Installed shim profile config into {CODEX_SHIM_PROFILE_PATH}.")
 
 
 def list_models(settings_path: Path) -> int:
@@ -340,6 +363,13 @@ def restore_codex_config() -> None:
         print(f"Removed stale shim backup {CODEX_CONFIG_BACKUP_PATH}.")
 
 
+def remove_codex_profile_config() -> None:
+    for path in (CODEX_SHIM_PROFILE_PATH, CODEX_SHIM_PROFILE_CLI_PATH, CODEX_SHIM_DESKTOP_WRAPPER_PATH):
+        if path.exists():
+            path.unlink()
+            print(f"Removed {path}.")
+
+
 def status(port: int) -> int:
     pid = _read_pid()
     if _pid_running(pid):
@@ -372,11 +402,13 @@ def exec_codex(settings_path: Path, port: int, codex_args: list[str]) -> None:
     os.execvpe("codex", args, env)
 
 
-def exec_codex_app(settings_path: Path, port: int, path: str) -> None:
+def exec_codex_app(settings_path: Path, port: int, path: str, *, shim_profile: bool = False) -> None:
     if not sys.platform.startswith("linux"):
         raise SystemExit("codex-shim app is Linux-only in this fork.")
     _quit_linux_codex_desktop()
-    args = _linux_codex_desktop_command(path)
+    if shim_profile:
+        _write_profile_wrappers()
+    args = _linux_codex_desktop_command(path, shim_profile=shim_profile)
     subprocess.Popen(args, env=_with_loopback_no_proxy(os.environ.copy()))
 
 
@@ -392,10 +424,13 @@ def _with_loopback_no_proxy(env: dict[str, str]) -> dict[str, str]:
     return env
 
 
-def _linux_codex_desktop_command(path: str = ".") -> list[str]:
+def _linux_codex_desktop_command(path: str = ".", *, shim_profile: bool = False) -> list[str]:
     launcher = os.environ.get("CODEX_DESKTOP_LINUX_LAUNCHER")
     if launcher:
         return [launcher, path]
+
+    if shim_profile and CODEX_SHIM_DESKTOP_WRAPPER_PATH.exists():
+        return [str(CODEX_SHIM_DESKTOP_WRAPPER_PATH), path]
 
     user_wrapper = Path.home() / ".local" / "bin" / "codex-desktop-patched"
     if user_wrapper.exists():
@@ -407,6 +442,102 @@ def _linux_codex_desktop_command(path: str = ".") -> list[str]:
 
     system_launcher = shutil.which("codex-desktop") or "/usr/bin/codex-desktop"
     return [system_launcher, "--x11", path]
+
+
+def _write_profile_wrappers(
+    model_slug: str | None = None,
+    provider_name: str | None = None,
+    port: int | None = None,
+) -> None:
+    model_slug, provider_name, port = _profile_wrapper_values(model_slug, provider_name, port)
+    overrides = [
+        f'model="{_toml_escape(model_slug)}"',
+        f'model_provider="{PROVIDER_NAME}"',
+        f'model_catalog_json="{_toml_escape(str(CATALOG_PATH))}"',
+        f'model_providers.{PROVIDER_NAME}.name="{_toml_escape(provider_name)}"',
+        f'model_providers.{PROVIDER_NAME}.base_url="http://127.0.0.1:{port}/v1"',
+        f'model_providers.{PROVIDER_NAME}.wire_api="responses"',
+        f'model_providers.{PROVIDER_NAME}.experimental_bearer_token="dummy"',
+        f'model_providers.{PROVIDER_NAME}.request_max_retries=3',
+        f'model_providers.{PROVIDER_NAME}.stream_max_retries=3',
+        f'model_providers.{PROVIDER_NAME}.stream_idle_timeout_ms=600000',
+    ]
+    override_lines = "".join(f"  -c {shlex.quote(pair)} \\\n" for pair in overrides)
+    CODEX_SHIM_PROFILE_CLI_PATH.parent.mkdir(parents=True, exist_ok=True)
+    CODEX_SHIM_PROFILE_CLI_PATH.write_text(
+        "#!/usr/bin/env bash\n"
+        "set -euo pipefail\n"
+        'CODEX_BIN="${CODEX_SHIM_CODEX_CLI:-}"\n'
+        'if [ -z "$CODEX_BIN" ]; then\n'
+        '  CODEX_BIN="$(command -v codex || true)"\n'
+        "fi\n"
+        'if [ -z "$CODEX_BIN" ]; then\n'
+        '  CODEX_BIN="$HOME/.local/bin/codex"\n'
+        "fi\n"
+        'exec "$CODEX_BIN" \\\n'
+        f"{override_lines}"
+        '  "$@"\n'
+    )
+    CODEX_SHIM_PROFILE_CLI_PATH.chmod(0o755)
+
+    CODEX_SHIM_DESKTOP_WRAPPER_PATH.parent.mkdir(parents=True, exist_ok=True)
+    CODEX_SHIM_DESKTOP_WRAPPER_PATH.write_text(
+        "#!/usr/bin/env bash\n"
+        "set -euo pipefail\n\n"
+        "export BAMF_DESKTOP_FILE_HINT=\"${BAMF_DESKTOP_FILE_HINT:-/usr/share/applications/codex-desktop.desktop}\"\n"
+        "export CHROME_DESKTOP=\"${CHROME_DESKTOP:-codex-desktop.desktop}\"\n"
+        f"export CODEX_CLI_PATH={shlex.quote(str(CODEX_SHIM_PROFILE_CLI_PATH))}\n"
+        "export CODEX_CHROME_EXECUTABLE=\"${CODEX_CHROME_EXECUTABLE:-/usr/bin/brave-origin-nightly}\"\n"
+        "BRAVE_CONFIG_DIR=\"${XDG_CONFIG_HOME:-$HOME/.config}/BraveSoftware/Brave-Origin-Nightly\"\n"
+        "export CODEX_CHROME_USER_DATA_DIR=\"${CODEX_CHROME_USER_DATA_DIR:-$BRAVE_CONFIG_DIR}\"\n"
+        "export CODEX_CHROME_PREFERENCES_PATH=\"${CODEX_CHROME_PREFERENCES_PATH:-$BRAVE_CONFIG_DIR/Default/Preferences}\"\n"
+        "export CODEX_CHROME_NATIVE_HOST_MANIFEST_PATH=\"${CODEX_CHROME_NATIVE_HOST_MANIFEST_PATH:-$BRAVE_CONFIG_DIR/NativeMessagingHosts/com.openai.codexextension.json}\"\n"
+        "export BROWSER=\"${BROWSER:-/usr/bin/brave-origin-nightly}\"\n"
+        "export NO_PROXY=127.0.0.1,localhost,::1\n"
+        "export no_proxy=127.0.0.1,localhost,::1\n\n"
+        f"CODEX_DESKTOP_APP_DIR=\"${{CODEX_SHIM_DESKTOP_APP_DIR:-${{CODEX_DESKTOP_APP_DIR:-{LINUX_SYSTEM_CODEX_APP}}}}}\"\n"
+        'SETSID_BIN="$(command -v setsid || true)"\n'
+        'if [ -n "$SETSID_BIN" ]; then\n'
+        '  exec "$SETSID_BIN" -f "$CODEX_DESKTOP_APP_DIR/start.sh" --x11 "$@"\n'
+        "fi\n"
+        'exec "$CODEX_DESKTOP_APP_DIR/start.sh" --x11 "$@"\n'
+    )
+    CODEX_SHIM_DESKTOP_WRAPPER_PATH.chmod(0o755)
+
+
+def _profile_wrapper_values(
+    model_slug: str | None = None,
+    provider_name: str | None = None,
+    port: int | None = None,
+) -> tuple[str, str, int]:
+    if model_slug and provider_name and port:
+        return model_slug, provider_name, port
+    parsed_model = model_slug
+    parsed_provider = provider_name
+    parsed_port = port or DEFAULT_PORT
+    if CODEX_SHIM_PROFILE_PATH.exists():
+        for line in CODEX_SHIM_PROFILE_PATH.read_text().splitlines():
+            stripped = line.strip()
+            if parsed_model is None and stripped.startswith("model = "):
+                parsed_model = _toml_unquote(stripped.split("=", 1)[1].strip())
+            elif parsed_provider is None and stripped.startswith("name = "):
+                parsed_provider = _toml_unquote(stripped.split("=", 1)[1].strip())
+            elif stripped.startswith("base_url = "):
+                value = _toml_unquote(stripped.split("=", 1)[1].strip())
+                prefix = "http://127.0.0.1:"
+                suffix = "/v1"
+                if value.startswith(prefix) and value.endswith(suffix):
+                    try:
+                        parsed_port = int(value[len(prefix) : -len(suffix)])
+                    except ValueError:
+                        pass
+    return parsed_model or "opencode-go-deepseek-v4-pro", parsed_provider or "Codex Shim", parsed_port
+
+
+def _toml_unquote(value: str) -> str:
+    if len(value) >= 2 and value[0] == value[-1] == '"':
+        return value[1:-1].replace('\\"', '"').replace("\\\\", "\\")
+    return value
 
 
 def _quit_linux_codex_desktop() -> None:
@@ -611,7 +742,8 @@ def _provider_display_name(models, slug: str, router_config=None) -> str:
             return display_name
     for model in models:
         if model.slug == slug:
-            return model.display_name
+            route = str(model.raw.get("provider_display_name") or "").strip()
+            return f"{route} / {model.display_name}" if route else model.display_name
     return "Codex Shim"
 
 
@@ -798,13 +930,13 @@ def _resolve_model_slug(models, requested: str | None, router_config=None) -> st
     if requested in configured and not byok_model_has_credentials(configured[requested]):
         if is_cursor_passthrough_slug(requested):
             raise SystemExit(
-                f"Model {requested!r} is configured for BYOK but has no API key. "
+                f"Model {requested!r} is configured for custom routing but has no API key. "
                 "Remove it from ~/.codex-shim/models.json to use Cursor subscription passthrough, "
                 "or set CURSOR_API_KEY / ~/.codex-shim/cursor-api-key."
             )
         raise SystemExit(
             f"Model {requested!r} is configured but has no API key. "
-            "Set the provider API key in ~/.codex-shim/models.json or the matching env var."
+            "Set the route API key in ~/.codex-shim/models.json or the matching env var."
         )
     if requested in by_model and len(by_model[requested]) == 1:
         return by_model[requested][0]
@@ -817,10 +949,10 @@ def _resolve_model_slug(models, requested: str | None, router_config=None) -> st
 
 
 def _current_managed_model() -> str | None:
-    if not CODEX_CONFIG_PATH.exists():
+    if not CODEX_SHIM_PROFILE_PATH.exists():
         return None
     in_managed = False
-    for line in CODEX_CONFIG_PATH.read_text().splitlines():
+    for line in CODEX_SHIM_PROFILE_PATH.read_text().splitlines():
         stripped = line.strip()
         if stripped == MANAGED_BEGIN:
             in_managed = True

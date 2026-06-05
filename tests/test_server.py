@@ -27,6 +27,7 @@ def auth_present(monkeypatch, tmp_path):
     auth.write_text(json.dumps({"tokens": {"access_token": "stub", "account_id": "acct"}}))
     monkeypatch.setattr("codex_shim.settings.DEFAULT_CODEX_AUTH", auth)
     monkeypatch.setattr("codex_shim.server.DEFAULT_CODEX_AUTH", auth)
+    monkeypatch.setenv("CODEX_SHIM_ENABLE_CHATGPT", "1")
     return auth
 
 

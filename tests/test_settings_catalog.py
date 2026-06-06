@@ -459,7 +459,7 @@ def test_profile_cli_wrapper_uses_config_overrides_for_app_server(monkeypatch, t
     assert '"$@"' in text
 
     desktop_text = cli.CODEX_SHIM_DESKTOP_WRAPPER_PATH.read_text()
-    assert "/home/ravish" not in desktop_text
+    assert "/home/" not in desktop_text
     assert "CODEX_SHIM_DESKTOP_APP_DIR" in desktop_text
     assert "/opt/codex-desktop" in desktop_text
 

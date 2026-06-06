@@ -10,6 +10,7 @@ Maintainer notes for **this repository**, rebased onto upstream
 | Public / first visit | [README](../README.md) | Fork identity and delta vs upstream; not a copy of the upstream mega-README |
 | Linux bridge users | [`linux-desktop.md`](linux-desktop.md) | Quick start, routing, `patch-app`, credentials, capability policy |
 | Fork maintainers | This file | Delta vs upstream, rebase workflow, tests, publishing |
+| Adapter implementers | [`RUST_ADAPTER_DESIGN.md`](RUST_ADAPTER_DESIGN.md) | Rust compatibility boundary, parity gates, and opt-in rollout |
 
 Do not duplicate user-guide prose here; link to [`linux-desktop.md`](linux-desktop.md) instead.
 
@@ -108,5 +109,6 @@ Coordinate before force-pushing rewritten history. Feature work may also live on
 ## Related reading
 
 - [`linux-desktop.md`](linux-desktop.md) — Linux bridge user guide
+- [`RUST_ADAPTER_DESIGN.md`](RUST_ADAPTER_DESIGN.md) — Rust adapter design and cutover gates
 - [`AUTO_ROUTER.md`](AUTO_ROUTER.md) — upstream Auto Router (unchanged by fork)
 - Upstream Codex Desktop release notes — affect `patch-app` bundle needles

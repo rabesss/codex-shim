@@ -26,6 +26,7 @@ This README explains **what the fork is and how it differs from upstream**. It i
 | Codex Desktop UI | Upstream platform-specific patching varies | **Linux `patch-app` / `restore-app`** for user-local overlay under `~/.local/share/codex-desktop-linux-overlay/`; multi-variant JS needles |
 | User documentation | Full README + platform guides on upstream | **[`docs/linux-desktop.md`](docs/linux-desktop.md)** (operational manual); this README (fork identity only) |
 | Maintainer documentation | Upstream contribution flow | **[`docs/FORK.md`](docs/FORK.md)** (delta, rebase, tests, publishing) |
+| Rust rewrite decision | Compatibility bridge design and cutover gates | **[`docs/RUST_ADAPTER_DESIGN.md`](docs/RUST_ADAPTER_DESIGN.md)** |
 
 ---
 
@@ -41,7 +42,7 @@ Changes on this branch relative to **`origin/main`** (refresh with `git diff ori
 | **`codex_shim/catalog.py`** | Picker `display_name` + provider labels; reasoning summary defaults. |
 | **`codex_shim/server.py`** | Clearer credential errors; versioned `/vN` base URL join. Provider-specific adapters stay in CLIProxyAPI. |
 | **Tests** | `tests/test_settings_catalog.py` (CLIProxyAPI matrix, credentials, catalog, Linux bundle patch); upstream server/translation tests remain intact. |
-| **Docs** | [`docs/linux-desktop.md`](docs/linux-desktop.md) — architecture, routing, credentials, capability policy, full `patch-app` procedure; [`docs/FORK.md`](docs/FORK.md) — maintainer playbook. |
+| **Docs** | [`docs/linux-desktop.md`](docs/linux-desktop.md) — architecture, routing, credentials, capability policy, full `patch-app` procedure; [`docs/FORK.md`](docs/FORK.md) — maintainer playbook; [`docs/RUST_ADAPTER_DESIGN.md`](docs/RUST_ADAPTER_DESIGN.md) — Rust parity and rollout design. |
 
 **Example matrix slugs:** `zai-coding-glm-5-1`, `opencode-go-deepseek-v4-pro`, `opencode-go-mimo-v2-5-pro`, `commandcode-deepseek-v4-pro`, `grok-composer-2-5-fast`.
 
@@ -81,6 +82,7 @@ codex-shim status    # loopback health (default 127.0.0.1:8765)
 | **README.md** (this file) | Visitors choosing a repo | Fork identity, delta vs upstream, what to clone |
 | **[`docs/linux-desktop.md`](docs/linux-desktop.md)** | Linux Desktop users | Full setup and operations |
 | **[`docs/FORK.md`](docs/FORK.md)** | Maintainers | Rebase, matrix changes, tests, publishing |
+| **[`docs/RUST_ADAPTER_DESIGN.md`](docs/RUST_ADAPTER_DESIGN.md)** | Maintainers | Rust compatibility boundary, parity gates, rollout |
 
 Upstream reference: [0xSero/codex-shim](https://github.com/0xSero/codex-shim).
 

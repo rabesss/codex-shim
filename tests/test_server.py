@@ -731,11 +731,44 @@ async def test_api_models_lists_configured_models_with_active_flag(
     try:
         resp = await shim_client.get("/api/models")
         assert resp.status == 200
+        assert resp.headers["Access-Control-Allow-Origin"] == "*"
+        assert resp.headers["Access-Control-Allow-Methods"] == "GET, OPTIONS"
+        assert resp.headers["Access-Control-Allow-Private-Network"] == "true"
         data = await resp.json()
         slugs = [m["slug"] for m in data]
         assert slugs == ["kimi-k26", "deepseek-v4-pro"]
         active = {m["slug"]: m["active"] for m in data}
         assert active == {"kimi-k26": False, "deepseek-v4-pro": True}
+        deepseek = data[1]
+        assert deepseek["model"] == "deepseek-v4-pro"
+        assert deepseek["model_provider"] == "codex_shim"
+        assert deepseek["owned_by"] == "codex_shim"
+        assert deepseek["input_modalities"] == ["text", "image"]
+        assert deepseek["supports_tools"] is True
+        assert deepseek["supports_reasoning"] is True
+        assert deepseek["upstream_model_id"] == "deepseek-v4-pro"
+        assert "api_key" not in json.dumps(deepseek).lower()
+    finally:
+        await shim_client.close()
+
+
+async def test_api_models_answers_browser_preflight(tmp_path, auth_missing):
+    settings = _picker_settings_file(tmp_path)
+    shim_client = TestClient(TestServer(ShimServer(settings).app()))
+    await shim_client.start_server()
+    try:
+        resp = await shim_client.options(
+            "/api/models",
+            headers={
+                "Origin": "http://127.0.0.1:5180",
+                "Access-Control-Request-Method": "GET",
+                "Access-Control-Request-Private-Network": "true",
+            },
+        )
+        assert resp.status == 204
+        assert resp.headers["Access-Control-Allow-Origin"] == "http://127.0.0.1:5180"
+        assert resp.headers["Access-Control-Allow-Methods"] == "GET, OPTIONS"
+        assert resp.headers["Access-Control-Allow-Private-Network"] == "true"
     finally:
         await shim_client.close()
 
@@ -743,6 +776,8 @@ async def test_api_models_lists_configured_models_with_active_flag(
 async def test_api_models_includes_chatgpt_when_auth_present(
     monkeypatch, tmp_path, auth_present
 ):
+    missing_cache = tmp_path / "missing-models-cache.json"
+    monkeypatch.setattr("codex_shim.settings.DEFAULT_CODEX_MODELS_CACHE", missing_cache)
     settings = _picker_settings_file(tmp_path)
     _stub_codex_config(monkeypatch, tmp_path, model="gpt-5.5")
     shim_client = TestClient(TestServer(ShimServer(settings).app()))
@@ -752,7 +787,40 @@ async def test_api_models_includes_chatgpt_when_auth_present(
         data = await resp.json()
         slugs = [m["slug"] for m in data]
         assert slugs[0] == "gpt-5.5"
-        assert data[0]["active"] is True
+        chatgpt = data[0]
+        assert chatgpt["active"] is True
+        assert chatgpt["model_provider"] == "codex_shim"
+        assert chatgpt["provider"] == "chatgpt"
+        assert chatgpt["provider_display_name"] == "ChatGPT/OpenAI"
+        assert chatgpt["input_modalities"] == ["text", "image"]
+        assert chatgpt["supports_tools"] is True
+        assert "api_key" not in json.dumps(chatgpt).lower()
+    finally:
+        await shim_client.close()
+
+
+async def test_api_models_includes_cursor_passthrough_metadata(
+    monkeypatch, tmp_path, cursor_present, auth_missing
+):
+    settings = tmp_path / "settings.json"
+    settings.write_text(json.dumps({"customModels": []}))
+    _stub_codex_config(monkeypatch, tmp_path, model="composer-2-5")
+    shim_client = TestClient(TestServer(ShimServer(settings).app()))
+    await shim_client.start_server()
+    try:
+        resp = await shim_client.get("/api/models")
+        data = await resp.json()
+        assert [m["slug"] for m in data] == ["composer-2-5"]
+        cursor = data[0]
+        assert cursor["active"] is True
+        assert cursor["model"] == "composer-2-5"
+        assert cursor["model_provider"] == "codex_shim"
+        assert cursor["provider"] == "cursor"
+        assert cursor["provider_display_name"] == "Cursor"
+        assert cursor["source"] == "Cursor subscription"
+        assert cursor["input_modalities"] == ["text", "image"]
+        assert cursor["supports_tools"] is True
+        assert "api_key" not in json.dumps(cursor).lower()
     finally:
         await shim_client.close()
 

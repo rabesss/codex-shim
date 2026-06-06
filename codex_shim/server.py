@@ -11,9 +11,11 @@ from urllib.parse import urljoin
 
 from aiohttp import ClientSession, ClientTimeout, web
 
+from .catalog import catalog_entry, chatgpt_passthrough_entries
 from .cursor_passthrough import (
     CURSOR_MODEL_SLUG,
     build_cursor_prompt,
+    cursor_catalog_entry,
     cursor_passthrough_available,
     cursor_passthrough_display_names,
     cursor_upstream_model,
@@ -53,6 +55,24 @@ from .translate import (
 
 DEBUG_DIR = Path(__file__).resolve().parents[1] / ".codex-shim"
 CODEX_CONFIG_PATH = Path.home() / ".codex" / "codex-shim.config.toml"
+API_MODELS_CORS_ALLOW_HEADERS = (
+    "accept, authorization, content-type, x-requested-with, "
+    "access-control-request-private-network"
+)
+
+
+def _api_models_cors_headers(request: web.Request) -> dict[str, str]:
+    origin = request.headers.get("Origin") or "*"
+    return {
+        "Access-Control-Allow-Origin": origin,
+        "Access-Control-Allow-Methods": "GET, OPTIONS",
+        "Access-Control-Allow-Headers": API_MODELS_CORS_ALLOW_HEADERS,
+        "Access-Control-Allow-Private-Network": "true",
+        "Vary": (
+            "Origin, Access-Control-Request-Method, "
+            "Access-Control-Request-Headers, Access-Control-Request-Private-Network"
+        ),
+    }
 
 
 class ShimServer:
@@ -74,55 +94,51 @@ class ShimServer:
         app.router.add_post("/v1/responses/compact", self.responses_compact)
         app.router.add_get("/picker", self.picker_page)
         app.router.add_get("/api/models", self.api_models)
+        app.router.add_options("/api/models", self.api_models_options)
         app.router.add_post("/api/switch", self.switch_model)
         return app
 
     async def picker_page(self, _request: web.Request) -> web.Response:
         return web.Response(text=_picker_html(), content_type="text/html")
 
-    async def api_models(self, _request: web.Request) -> web.Response:
+    async def api_models_options(self, request: web.Request) -> web.Response:
+        return web.Response(status=204, headers=_api_models_cors_headers(request))
+
+    async def api_models(self, request: web.Request) -> web.Response:
         current = _current_managed_model()
         data: list[dict[str, Any]] = []
         router_config = self._active_router()
         if router_config is not None:
-            data.append(
-                {
-                    "slug": router_config.slug,
-                    "display_name": router_config.display_name,
-                    "provider": "auto",
-                    "active": current == router_config.slug,
-                }
-            )
+            data.append(_api_catalog_entry(
+                router_module.router_catalog_entry(router_config),
+                active=current == router_config.slug,
+                provider="auto",
+                provider_display_name="Codex Shim Router",
+                source="codex-shim",
+            ))
         if chatgpt_passthrough_available():
-            for slug, display_name in chatgpt_passthrough_display_names().items():
-                data.append(
-                    {
-                        "slug": slug,
-                        "display_name": display_name,
-                        "provider": "chatgpt",
-                        "active": current == slug,
-                    }
-                )
+            for entry in chatgpt_passthrough_entries():
+                slug = str(entry.get("slug") or "").strip()
+                data.append(_api_catalog_entry(
+                    entry,
+                    active=current == slug,
+                    provider="chatgpt",
+                    provider_display_name="ChatGPT/OpenAI",
+                    source="ChatGPT passthrough",
+                ))
         if cursor_passthrough_available():
-            for slug, display_name in cursor_passthrough_display_names().items():
-                data.append(
-                    {
-                        "slug": slug,
-                        "display_name": display_name,
-                        "provider": "cursor",
-                        "active": current == slug,
-                    }
-                )
+            entry = cursor_catalog_entry()
+            slug = str(entry.get("slug") or "").strip()
+            data.append(_api_catalog_entry(
+                entry,
+                active=current == slug,
+                provider="cursor",
+                provider_display_name="Cursor",
+                source="Cursor subscription",
+            ))
         for m in usable_byok_models(self.settings.load()):
-            data.append(
-                {
-                    "slug": m.slug,
-                    "display_name": m.display_name,
-                    "provider": m.provider,
-                    "active": current == m.slug,
-                }
-            )
-        return web.json_response(data)
+            data.append(_api_model_entry(m, active=current == m.slug))
+        return web.json_response(data, headers=_api_models_cors_headers(request))
 
     async def switch_model(self, request: web.Request) -> web.Response:
         try:
@@ -152,6 +168,7 @@ class ShimServer:
         if restart:
             _restart_codex_app()
         return web.json_response({"ok": True, "model": slug, "restarted": restart})
+
 
     async def health(self, _request: web.Request) -> web.Response:
         models = usable_byok_models(self.settings.load())
@@ -824,6 +841,95 @@ class ShimServer:
         except Exception:
             pass
         return response
+
+
+def _api_model_entry(model: ShimModel, *, active: bool) -> dict[str, Any]:
+    entry = catalog_entry(model)
+    provider_display_name = str(
+        model.raw.get("provider_display_name")
+        or model.raw.get("providerDisplayName")
+        or model.raw.get("provider_label")
+        or model.raw.get("providerLabel")
+        or model.provider
+    ).strip()
+    source = "CLIProxyAPI" if "127.0.0.1:8317" in model.base_url else "codex-shim"
+    supported_reasoning_efforts = [
+        {
+            "reasoningEffort": str(item.get("effort") or "").strip(),
+            "description": str(item.get("description") or "").strip(),
+        }
+        for item in entry.get("supported_reasoning_levels", [])
+        if isinstance(item, dict) and str(item.get("effort") or "").strip()
+    ]
+    return {
+        "slug": model.slug,
+        "model": model.model,
+        "display_name": entry["display_name"],
+        "provider": model.provider,
+        "provider_display_name": provider_display_name,
+        "model_provider": PROVIDER_NAME,
+        "owned_by": PROVIDER_NAME,
+        "source": source,
+        "active": active,
+        "has_credentials": byok_model_has_credentials(model),
+        "description": entry.get("description"),
+        "context_window": entry.get("context_window"),
+        "max_context_window": entry.get("max_context_window"),
+        "input_modalities": entry.get("input_modalities", ["text"]),
+        "supports_image_detail_original": entry.get("supports_image_detail_original", False),
+        "supports_tools": entry.get("supports_parallel_tool_calls", False),
+        "supports_reasoning": entry.get("supports_reasoning_summaries", False),
+        "supports_streaming": bool(model.raw.get("supports_streaming", model.raw.get("supportsStreaming", True))),
+        "supported_reasoning_efforts": supported_reasoning_efforts,
+        "default_reasoning_effort": entry.get("default_reasoning_level"),
+        "upstream_model_id": model.model,
+    }
+
+
+def _api_catalog_entry(
+    entry: dict[str, Any],
+    *,
+    active: bool,
+    provider: str,
+    provider_display_name: str,
+    source: str,
+) -> dict[str, Any]:
+    slug = str(entry.get("slug") or "").strip()
+    model = str(entry.get("model") or entry.get("upstream_model_id") or slug).strip()
+    supported_reasoning_efforts = [
+        {
+            "reasoningEffort": str(item.get("effort") or item.get("reasoningEffort") or "").strip(),
+            "description": str(item.get("description") or "").strip(),
+        }
+        for item in entry.get("supported_reasoning_levels", [])
+        if isinstance(item, dict) and str(item.get("effort") or item.get("reasoningEffort") or "").strip()
+    ]
+    input_modalities = entry.get("input_modalities")
+    if not isinstance(input_modalities, list) or not input_modalities:
+        input_modalities = ["text"]
+    return {
+        "slug": slug,
+        "model": model or slug,
+        "display_name": str(entry.get("display_name") or slug).strip(),
+        "provider": provider,
+        "provider_display_name": provider_display_name,
+        "model_provider": PROVIDER_NAME,
+        "owned_by": PROVIDER_NAME,
+        "source": source,
+        "active": active,
+        "has_credentials": True,
+        "description": entry.get("description"),
+        "context_window": entry.get("context_window"),
+        "max_context_window": entry.get("max_context_window"),
+        "input_modalities": input_modalities,
+        "supports_image_detail_original": entry.get("supports_image_detail_original", False),
+        "supports_tools": entry.get("supports_parallel_tool_calls", False),
+        "supports_reasoning": entry.get("supports_reasoning_summaries", False),
+        "supports_streaming": True,
+        "supported_reasoning_efforts": supported_reasoning_efforts,
+        "default_reasoning_effort": entry.get("default_reasoning_level"),
+        "upstream_model_id": model or slug,
+    }
 
 
 _DROP_ITEM = object()

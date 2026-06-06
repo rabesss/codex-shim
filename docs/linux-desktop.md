@@ -453,14 +453,14 @@ README **Limitations**.
 pip install -e ~/codex-shim
 codex-shim desktop write-models
 codex-shim generate && codex-shim start
-
-# Desktop overlay + launch
-codex-shim patch-app
-codex-shim enable    # or: codex-shim app .
-
-# Switch model
-codex-shim model use opencode-go-deepseek-v4-pro
 ```
+
+The maintained Linux Desktop overlay now has a single-app custom-model bridge:
+Desktop reads `http://127.0.0.1:8765/api/models` for picker rows and injects
+`codex_shim` only for selected custom slugs. The older `codex-shim app`,
+`codex-shim model use`, and `codex-shim patch-app` flows remain useful for
+legacy fallback/debugging, but they are not the primary path for a maintained
+workstation build.
 
 After changing `desktop_models.py` or upgrading Codex Desktop, maintainers should follow
 [`docs/FORK.md`](FORK.md) before deploying updated catalogs to daily-driver machines.

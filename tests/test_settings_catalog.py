@@ -209,6 +209,27 @@ def test_desktop_model_matrix_can_use_live_cliproxyapi_discovery():
     assert rows["grok-4-3"]["no_image_support"] is False
 
 
+def test_desktop_model_matrix_keeps_xiaomi_mimo_token_plan_text_only():
+    payload = desktop_models_payload(
+        cliproxyapi_models=[
+            {"id": "mimo-v2.5", "owned_by": "xiaomi-mimo"},
+            {"id": "MiniMax-M3", "owned_by": "minimax-coding"},
+        ]
+    )
+    rows = {row["slug"]: row for row in payload["models"]}
+
+    mimo = rows["xiaomi-mimo-mimo-v2-5"]
+    assert mimo["provider_display_name"] == "CLIProxyAPI / Xiaomi MiMo"
+    assert mimo["base_url"] == "http://127.0.0.1:8317/v1"
+    assert mimo["api_key_credential"] == "CLIPROXY_INTERNAL_API_KEY"
+    assert mimo["no_image_support"] is True
+    assert mimo["supports_tools"] is True
+    assert mimo["supports_reasoning"] is False
+
+    image_capable = rows["minimax-coding-minimax-m3"]
+    assert image_capable["no_image_support"] is False
+
+
 def test_catalog_display_names_are_route_first(tmp_path):
     payload = desktop_models_payload()
     settings = tmp_path / "models.json"

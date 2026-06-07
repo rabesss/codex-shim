@@ -26,6 +26,11 @@ Official OpenAI/Codex models must remain direct on
 `model_provider = "openai"`. This shim is an opt-in provider for custom rows; it
 must not become a hidden route for first-party traffic.
 
+Browser tools for custom rows use the companion Desktop repo's patched official
+Browser/Chrome plugin surface and maintained Linux Computer Use backend. They
+do not require Agent Workspaces, a hidden workspace browser, or
+`agent-workspace-linux`.
+
 ## Architecture
 
 ```text

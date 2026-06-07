@@ -17,6 +17,10 @@ ownership boundaries.
 - dynamic tool refresh on resume;
 - Linux Browser extension and native-host integration.
 
+The maintained Browser path is the patched official Browser/Chrome plugin
+surface plus the Linux Computer Use backend. It does not depend on Agent
+Workspaces, a hidden workspace browser, or `agent-workspace-linux`.
+
 `codex-shim` owns:
 
 - CLIProxyAPI model discovery and Desktop catalog metadata;

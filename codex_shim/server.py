@@ -44,6 +44,7 @@ from .settings import (
 )
 from .translate import (
     SHIM_ENCRYPTED_CONTENT_PREFIX,
+    StreamingThinkStripper,
     anthropic_to_chat_response,
     anthropic_to_response,
     chat_completion_to_response,
@@ -1049,6 +1050,7 @@ class ResponsesStreamState:
         self.tool_calls: dict[int, dict[str, Any]] = {}
         # Reasoning (extended thinking) blocks, keyed by upstream index.
         self.reasoning_blocks: dict[Any, dict[str, Any]] = {}
+        self.chat_content_think_stripper = StreamingThinkStripper()
         self.next_output_index = 0
 
     # ------------------------------------------------------------------
@@ -1058,6 +1060,12 @@ class ResponsesStreamState:
         await _write_sse(response, {"type": "response.created", "response": self._response("in_progress")})
 
     async def finish(self, response: web.StreamResponse) -> None:
+        remainder = self.chat_content_think_stripper.finish()
+        if remainder:
+            for state in list(self.reasoning_blocks.values()):
+                if not state.get("closed"):
+                    await self._close_reasoning(response, state)
+            await self._text_delta(response, remainder)
         for state in sorted(self.reasoning_blocks.values(), key=lambda s: s["output_index"]):
             if not state.get("closed"):
                 await self._close_reasoning(response, state)
@@ -1082,6 +1090,8 @@ class ResponsesStreamState:
         if reasoning:
             await self._chat_reasoning_delta(response, reasoning)
         content = delta.get("content")
+        if content:
+            content = self.chat_content_think_stripper.feed(content)
         if content:
             for state in list(self.reasoning_blocks.values()):
                 if not state.get("closed"):

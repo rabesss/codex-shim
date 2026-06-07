@@ -303,6 +303,34 @@ async def test_streaming_openai_chat_response_completed_includes_usage(tmp_path)
     await upstream_client.close()
 
 
+async def test_streaming_openai_chat_delta_strips_think_blocks():
+    class FakeResponse:
+        def __init__(self):
+            self.chunks: list[bytes] = []
+
+        async def write(self, data: bytes):
+            self.chunks.append(data)
+
+    downstream = FakeResponse()
+    state = ResponsesStreamState("minimax-coding")
+    for text in ["Visible <thi", "nk>secret", "</thi", "nk> final"]:
+        await state.write_chat_delta(
+            downstream,
+            {"choices": [{"delta": {"content": text}}]},
+        )
+    await state.finish(downstream)
+
+    raw = b"".join(downstream.chunks).decode()
+    events = _sse_events(raw)
+    deltas = [event["delta"] for event in events if event.get("type") == "response.output_text.delta"]
+    completed = [event for event in events if event.get("type") == "response.completed"][-1]
+
+    assert deltas == ["Visible ", " final"]
+    assert completed["response"]["output"][0]["content"][0]["text"] == "Visible  final"
+    assert "<think>" not in raw
+    assert "secret" not in raw
+
+
 async def test_streaming_anthropic_response_completed_includes_usage():
     class FakeResponse:
         def __init__(self):

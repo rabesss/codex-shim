@@ -357,6 +357,65 @@ def strip_think(text: str) -> str:
     return THINK_RE.sub("", text or "")
 
 
+def _suffix_prefix_len(value: str, prefix: str) -> int:
+    max_len = min(len(value), len(prefix) - 1)
+    for length in range(max_len, 0, -1):
+        if prefix.startswith(value[-length:].lower()):
+            return length
+    return 0
+
+
+class StreamingThinkStripper:
+    """Incrementally remove <think> blocks from streamed text deltas."""
+
+    _OPEN = "<think>"
+    _CLOSE = "</think>"
+
+    def __init__(self) -> None:
+        self._buffer = ""
+        self._in_think = False
+
+    def feed(self, text: str) -> str:
+        if not text:
+            return ""
+        self._buffer += text
+        output: list[str] = []
+        while self._buffer:
+            lowered = self._buffer.lower()
+            if self._in_think:
+                close_at = lowered.find(self._CLOSE)
+                if close_at == -1:
+                    keep = _suffix_prefix_len(self._buffer, self._CLOSE)
+                    self._buffer = self._buffer[-keep:] if keep else ""
+                    return "".join(output)
+                self._buffer = self._buffer[close_at + len(self._CLOSE) :]
+                self._in_think = False
+                continue
+
+            open_at = lowered.find(self._OPEN)
+            if open_at == -1:
+                keep = _suffix_prefix_len(self._buffer, self._OPEN)
+                flush_len = len(self._buffer) - keep
+                output.append(self._buffer[:flush_len])
+                self._buffer = self._buffer[flush_len:]
+                return "".join(output)
+
+            output.append(self._buffer[:open_at])
+            self._buffer = self._buffer[open_at + len(self._OPEN) :]
+            self._in_think = True
+
+        return "".join(output)
+
+    def finish(self) -> str:
+        if self._in_think:
+            self._buffer = ""
+            self._in_think = False
+            return ""
+        output = self._buffer
+        self._buffer = ""
+        return output
+
+
 def _responses_input_to_messages(value: Any) -> list[dict[str, Any]]:
     if value is None:
         return []

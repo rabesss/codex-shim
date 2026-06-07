@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from codex_shim.translate import (
+    StreamingThinkStripper,
     anthropic_to_response,
     chat_completion_to_response,
     responses_namespace_call_map,
@@ -352,6 +353,24 @@ def test_chat_completion_to_response_strips_think():
     out = chat_completion_to_response(payload, "slug")
     assert out["model"] == "slug"
     assert out["output"][0]["content"][0]["text"] == "Hello"
+
+
+def test_streaming_think_stripper_handles_split_tags():
+    stripper = StreamingThinkStripper()
+
+    assert stripper.feed("Hel") == "Hel"
+    assert stripper.feed("lo <thi") == "lo "
+    assert stripper.feed("nk>secret") == ""
+    assert stripper.feed("</thi") == ""
+    assert stripper.feed("nk>world") == "world"
+    assert stripper.finish() == ""
+
+
+def test_streaming_think_stripper_drops_unclosed_think_block():
+    stripper = StreamingThinkStripper()
+
+    assert stripper.feed("Visible <think>secret") == "Visible "
+    assert stripper.finish() == ""
 
 
 def test_chat_completion_to_response_restores_namespace_tool_call_fields():

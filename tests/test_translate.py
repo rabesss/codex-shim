@@ -1,6 +1,12 @@
 from __future__ import annotations
 
-from codex_shim.translate import anthropic_to_response, chat_completion_to_response, responses_to_anthropic, responses_to_chat
+from codex_shim.translate import (
+    anthropic_to_response,
+    chat_completion_to_response,
+    responses_namespace_call_map,
+    responses_to_anthropic,
+    responses_to_chat,
+)
 
 
 def test_responses_to_chat_text_input():
@@ -74,6 +80,124 @@ def test_responses_function_tools_convert_to_chat_shape():
             "function": {"name": "do_work", "description": "Do work", "parameters": {"type": "object"}},
         }
     ]
+
+
+def test_native_responses_tools_preserve_codex_app_and_browser():
+    body = {
+        "model": "slug",
+        "input": "Browse",
+        "tools": [
+            {"type": "codex_app"},
+            {"type": "codex_app__browser"},
+            {"type": "browser"},
+            {"type": "mcp__node_repl__js"},
+        ],
+    }
+
+    out = responses_to_chat(body, "real-model")
+
+    assert [tool["function"]["name"] for tool in out["tools"]] == [
+        "codex_app",
+        "codex_app__browser",
+        "browser",
+        "mcp__node_repl__js",
+    ]
+
+
+def test_responses_namespace_tools_flatten_to_callable_names():
+    body = {
+        "model": "slug",
+        "input": "Browse",
+        "tools": [
+            {
+                "type": "namespace",
+                "name": "mcp__node_repl",
+                "description": "Use js to run JavaScript.",
+                "tools": [
+                    {
+                        "type": "function",
+                        "name": "js",
+                        "description": "Run JavaScript.",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {"code": {"type": "string"}},
+                            "required": ["code"],
+                        },
+                    },
+                    {
+                        "type": "function",
+                        "name": "js_reset",
+                        "description": "Reset the JavaScript runtime.",
+                        "parameters": {"type": "object", "properties": {}},
+                    },
+                ],
+            },
+            {
+                "type": "namespace",
+                "name": "codex_app",
+                "tools": [
+                    {
+                        "type": "function",
+                        "name": "read_thread_terminal",
+                        "description": "Read terminal output.",
+                        "parameters": {"type": "object", "properties": {}, "additionalProperties": False},
+                    }
+                ],
+            },
+        ],
+    }
+
+    out = responses_to_chat(body, "real-model")
+
+    assert [tool["function"]["name"] for tool in out["tools"]] == [
+        "mcp__node_repl__js",
+        "mcp__node_repl__js_reset",
+        "codex_app__read_thread_terminal",
+    ]
+    assert out["tools"][0]["function"]["description"] == "Run JavaScript."
+    assert out["tools"][0]["function"]["parameters"]["required"] == ["code"]
+
+
+def test_responses_namespace_function_call_history_flattens_to_chat_name():
+    body = {
+        "model": "slug",
+        "input": [
+            {
+                "type": "function_call",
+                "call_id": "call_1",
+                "namespace": "mcp__node_repl",
+                "name": "js",
+                "arguments": "{\"code\":\"1+1\"}",
+            }
+        ],
+    }
+
+    out = responses_to_chat(body, "real-model")
+
+    assert out["messages"] == [
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {
+                    "id": "call_1",
+                    "type": "function",
+                    "function": {"name": "mcp__node_repl__js", "arguments": "{\"code\":\"1+1\"}"},
+                }
+            ],
+        }
+    ]
+
+
+def test_mcp_tool_names_preserve_at_sign():
+    body = {
+        "model": "slug",
+        "input": "Hi",
+        "tools": [{"type": "mcp__plugin@browser__navigate"}],
+    }
+
+    out = responses_to_chat(body, "real-model")
+    assert out["tools"][0]["function"]["name"] == "mcp__plugin@browser__navigate"
 
 
 def test_native_responses_tools_get_function_fallbacks_for_byok_chat():
@@ -228,6 +352,48 @@ def test_chat_completion_to_response_strips_think():
     out = chat_completion_to_response(payload, "slug")
     assert out["model"] == "slug"
     assert out["output"][0]["content"][0]["text"] == "Hello"
+
+
+def test_chat_completion_to_response_restores_namespace_tool_call_fields():
+    tools = [
+        {
+            "type": "namespace",
+            "name": "mcp__node_repl",
+            "tools": [{"type": "function", "name": "js", "parameters": {"type": "object"}}],
+        }
+    ]
+    payload = {
+        "id": "chatcmpl_1",
+        "choices": [
+            {
+                "message": {
+                    "role": "assistant",
+                    "content": "",
+                    "tool_calls": [
+                        {
+                            "id": "call_1",
+                            "type": "function",
+                            "function": {"name": "mcp__node_repl__js", "arguments": "{\"code\":\"1+1\"}"},
+                        }
+                    ],
+                }
+            }
+        ],
+    }
+
+    out = chat_completion_to_response(payload, "slug", responses_namespace_call_map(tools))
+
+    assert out["output"] == [
+        {
+            "id": "call_1",
+            "type": "function_call",
+            "status": "completed",
+            "call_id": "call_1",
+            "name": "js",
+            "namespace": "mcp__node_repl",
+            "arguments": "{\"code\":\"1+1\"}",
+        }
+    ]
 
 
 def test_chat_completion_to_response_normalizes_cached_usage():

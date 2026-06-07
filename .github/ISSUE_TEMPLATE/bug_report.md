@@ -1,6 +1,6 @@
 ---
 name: Bug report
-about: Report a problem with the shim, ChatGPT passthrough, or the Desktop patch
+about: Report a problem with the shim or companion Desktop integration
 labels: bug
 ---
 
@@ -11,9 +11,10 @@ labels: bug
 ## Environment
 
 - Codex Desktop / CLI version: `codex --version` ->
-- OS: macOS arm64 / x86_64 / Linux distro / WSL ->
+- Linux distribution and architecture ->
 - Python version: `python3 --version` ->
 - codex-shim commit: `git -C <path-to-codex-shim> rev-parse --short HEAD` ->
+- codex-desktop-control commit, when relevant ->
 
 ## Repro
 
@@ -33,9 +34,10 @@ labels: bug
 
 ## Route
 
-- [ ] Configured BYOK/upstream model (slug: `____`)
-- [ ] `gpt-5.5` ChatGPT passthrough
-- [ ] Codex Desktop picker / ASAR patch
+- [ ] CLIProxyAPI/custom model (slug: `____`)
+- [ ] Optional passthrough route
+- [ ] Companion Desktop picker / thread lifecycle
+- [ ] Namespaced or Browser tool translation
 - [ ] Other (please describe)
 
 ## Additional context

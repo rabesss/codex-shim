@@ -1,114 +1,95 @@
-# Fork maintenance: Linux desktop CLIProxyAPI bridge
+# Fork Maintenance
 
-Maintainer notes for **this repository**, rebased onto upstream
-**[0xSero/codex-shim](https://github.com/0xSero/codex-shim)** (`origin` → `origin/main`).
+This repository is a Linux-focused fork of
+[`0xSero/codex-shim`](https://github.com/0xSero/codex-shim) and the companion
+adapter for
+[`rabesss/codex-desktop-control`](https://github.com/rabesss/codex-desktop-control).
 
-## Documentation layout
+## Ownership Boundary
 
-| Audience | Document | Role |
-|----------|----------|------|
-| Public / first visit | [README](../README.md) | Fork identity and delta vs upstream; not a copy of the upstream mega-README |
-| Linux bridge users | [`linux-desktop.md`](linux-desktop.md) | Quick start, routing, `patch-app`, credentials, capability policy |
-| Fork maintainers | This file | Delta vs upstream, rebase workflow, tests, publishing |
-| Adapter implementers | [`RUST_ADAPTER_DESIGN.md`](RUST_ADAPTER_DESIGN.md) | Rust compatibility boundary, parity gates, and opt-in rollout |
+Keep changes in this repository when they concern:
 
-Do not duplicate user-guide prose here; link to [`linux-desktop.md`](linux-desktop.md) instead.
+- CLIProxyAPI discovery and route metadata;
+- Codex Responses, streaming, compaction, image, or tool translation;
+- namespace-tool flattening/restoration;
+- credential resolution and loopback service behavior;
+- generated catalog/config/profile helpers.
 
-Upstream-only topics (Auto Router, subscription passthrough, full README depth): stay in upstream docs — e.g. [`AUTO_ROUTER.md`](AUTO_ROUTER.md).
+Keep Desktop picker, fork/resume payloads, Browser feature exposure, ASAR
+patches, packaging, and installed-app verification in the companion Desktop
+repository.
 
-## Fork delta vs `origin/main`
+`patch-app` and `restore-app` remain for legacy overlay compatibility. Do not
+expand them as the primary integration path.
 
-Refresh the diff after every rebase:
+## Upstream Sync
 
-```bash
-git fetch origin
-git diff origin/main...HEAD --stat
-git diff origin/main...HEAD -- ':!*.md' ':!docs/*'
+The expected remotes are:
+
+```text
+origin  https://github.com/0xSero/codex-shim.git
+fork    https://github.com/rabesss/codex-shim.git
 ```
 
-**Code and tests** (branch tip; re-run `--stat` after rebase):
+Before rebasing or merging upstream:
 
-| File | Change |
-|------|--------|
-| `codex_shim/desktop_models.py` | **New.** CLIProxyAPI discovery/bootstrap `models.json` matrix (`desktop_models_payload`, `write_desktop_models`). |
-| `codex_shim/cli.py` | `desktop write-models`; Linux `patch-app` / `restore-app`; multi-variant Desktop JS needles; health check timeout 3s. |
-| `codex_shim/settings.py` | `api_key_env`, `api_key_credential`, `api_key_file`; `$CREDENTIALS_DIRECTORY` + env fallback; `auto_compact_token_limit`, `truncation_limit`; no silent Cursor key fallback on empty `api_key`. |
-| `codex_shim/catalog.py` | Route-first `Provider / Model` `display_name`; `provider_display_name` from CLIProxyAPI route metadata; capability flags for image/tool/reasoning surfaces. |
-| `codex_shim/server.py` | Credential error text; versioned `/vN` base URL join. Provider-specific adapters remain in CLIProxyAPI. |
-| `tests/test_settings_catalog.py` | CLIProxyAPI matrix, credentials, catalog labels, Linux bundle patch tests, discovery filtering. |
-| `tests/test_server.py` | Upstream Responses/chat routing tests. |
+1. Review `git diff origin/main...main` and classify each fork-owned change.
+2. Preserve loopback/Host-header security checks and credential behavior.
+3. Re-run translation tests, especially streaming and namespace tools.
+4. Re-run the cross-repository Desktop fork/resume/Browser smoke path.
+5. Keep official OpenAI routing direct in the companion Desktop setup.
 
-**Documentation on the fork branch:** `README.md` (fork identity / delta), `docs/linux-desktop.md`, `docs/FORK.md`.
+## Model Matrix Changes
 
-## Fork-only behavior (summary)
+CLIProxyAPI is the provider source of truth. Prefer live discovery. Bootstrap
+rows and capability overrides are fallback metadata only and should contain no
+provider endpoints beyond the local aggregator, no account identifiers, and no
+credential values.
 
-| Area | Maintainer note |
-|------|-----------------|
-| Matrix | `codex-shim desktop write-models` → default `~/.codex-shim/models.json`; live CLIProxyAPI discovery when `CLIPROXY_INTERNAL_API_KEY` is in the environment; bootstrap fallback otherwise. |
-| Matrix source | CLIProxyAPI `/v1/models` is the source of truth. `desktop_models.py` owns slug cleanup and Codex capability overrides only. |
-| Credentials | Generated rows use `api_key_credential: CLIPROXY_INTERNAL_API_KEY`; provider keys stay in CLIProxyAPI. User setup → [`linux-desktop.md`](linux-desktop.md). |
-| Desktop picker | Linux-only `patch-app` / `restore-app` for the `codex-desktop-linux` overlay (`CODEX_DESKTOP_LINUX_*` env overrides). |
-| Catalog | Picker labels use route-first `Provider / Model` names; compaction/truncation limits from settings. |
-
-## CLI surface (fork-specific)
-
-| Command | Purpose |
-|---------|---------|
-| `codex-shim desktop write-models` | Write CLIProxyAPI-backed matrix (`--output`, `--no-commandcode`, `--no-cpa-oauth`). |
-| `codex-shim patch-app` | Refresh and patch Linux overlay from `/opt/codex-desktop`. |
-| `codex-shim restore-app` | Restore Linux overlay `app.asar` from shim backup. |
-
-## Maintainer workflow
+After matrix changes:
 
 ```bash
-git fetch origin
-git rebase origin/main   # conflicts often in cli.py / patch needles after Desktop bumps
-
-python3 -m pip install -e ".[dev]"   # or pytest + aiohttp per README
-python3 -m pytest tests/ -q
-
-codex-shim desktop write-models --output ~/.codex-shim/models.json
-codex-shim generate
-# systemctl --user restart codex-shim.service   # if deployed via user unit
-codex-shim status
+codex-shim desktop write-models --output /tmp/models.json
+codex-shim --settings /tmp/models.json generate
+codex-shim --settings /tmp/models.json list
 ```
 
-After changing `desktop_models.py`:
+Inspect generated JSON for duplicate slugs, unsupported capabilities, personal
+data, and secret-shaped fields before publishing.
 
-1. Regenerate local `models.json` on deploy machines (never commit secrets). Use a CLIProxyAPI internal key in the environment when you want live discovery.
-2. Run `test_desktop_model_matrix_*` and catalog tests in `tests/test_settings_catalog.py`.
-3. Smoke one slug per CLIProxyAPI route family: `opencode-go-*`, `commandcode-*`, `grok-*`, plus one vision row if `no_image_support` changed.
-
-End-user deploy steps: [`linux-desktop.md`](linux-desktop.md).
-
-## Syncing with upstream
-
-1. `git fetch origin` and rebase (or merge) the fork branch onto `origin/main`.
-2. Full `pytest`; fork regressions concentrate in `tests/test_settings_catalog.py`.
-3. Re-run `patch-app` smoke after Codex Desktop version bumps (needle strings in bundled JS change).
-4. Keep README focused on fork identity and delta; new operational user prose belongs in `docs/linux-desktop.md`, not README or this file.
-
-## Publishing
-
-| Item | Value |
-|------|--------|
-| Fork remote | `https://github.com/rabesss/codex-shim` (`git remote` name: `fork`) |
-| Fork default branch | `main` |
-| Upstream remote | `origin` → `0xSero/codex-shim` |
+## Required Tests
 
 ```bash
-git push fork main
+python3 -m venv .venv
+. .venv/bin/activate
+python3 -m pip install -e ".[dev]"
+python3 -m pytest -q
+python3 -m compileall -q codex_shim
+git diff --check
 ```
 
-Coordinate before force-pushing rewritten history. Feature work may also live on `linux/desktop-provider-bridge`; merge to `main` before publishing unless you intentionally ship only the feature branch.
+For translation changes, include focused coverage for request history,
+streaming deltas, terminal events, and returned tool-call shape. For Desktop
+integration changes, also run the companion repository's custom-model feature
+tests and installed routing verifier.
 
-## PKG-INFO
+## Release Checklist
 
-`codex_shim.egg-info/PKG-INFO` is **generated from `README.md` at package build time** (setuptools reads the README long description). Edit `README.md` and docs in git only; rebuild the editable install (`pip install -e .`) to refresh local `PKG-INFO` if you inspect it. Do not treat `PKG-INFO` as the source of truth for fork user docs — use [`linux-desktop.md`](linux-desktop.md).
+1. Confirm all tracked documentation uses the current companion repository and
+   no removed branch or legacy Linux wrapper.
+2. Confirm generated files, logs, auth data, request dumps, and local service
+   files are untracked.
+3. Scan tracked Markdown and fixtures for personal paths, account ids, tokens,
+   and credential values.
+4. Run the full test suite and `git diff --check`.
+5. Commit the shim independently and record the companion Desktop commit used
+   for integration validation.
+6. Push only a clean, reviewed `main` commit to the fork remote.
 
-## Related reading
+## Documentation Map
 
-- [`linux-desktop.md`](linux-desktop.md) — Linux bridge user guide
-- [`RUST_ADAPTER_DESIGN.md`](RUST_ADAPTER_DESIGN.md) — Rust adapter design and cutover gates
-- [`AUTO_ROUTER.md`](AUTO_ROUTER.md) — upstream Auto Router (unchanged by fork)
-- Upstream Codex Desktop release notes — affect `patch-app` bundle needles
+- [`../README.md`](../README.md): public architecture, setup, and limitations.
+- [`linux-desktop.md`](linux-desktop.md): integrated Desktop setup and smoke
+  tests.
+- [`AUTO_ROUTER.md`](AUTO_ROUTER.md): optional classifier/router behavior.
+- [`../CONTRIBUTING.md`](../CONTRIBUTING.md): contributor workflow and reports.

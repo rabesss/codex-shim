@@ -1,5 +1,10 @@
 # Auto Router — pick the right model for every task, automatically
 
+Auto Router selects among routes already configured in `codex-shim`. In the
+integrated Linux Desktop stack, picker/session behavior remains owned by
+[`rabesss/codex-desktop-control`](https://github.com/rabesss/codex-desktop-control),
+while this document covers only shim-side route selection and translation.
+
 The Auto Router adds one extra entry to the Codex picker: **`Auto (smart
 routing)`** (slug `codex-auto`). Choose it and the shim decides, *per task*,
 which of your configured models to use — sending trivial turns to a cheap model

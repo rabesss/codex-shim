@@ -5,9 +5,17 @@ All notable changes to this project will be documented in this file.
 The format is loosely based on [Keep a Changelog](https://keepachangelog.com/),
 and this project does not yet follow semantic versioning (pre-1.0).
 
+Entries below the current Unreleased section include inherited upstream history.
+Current platform support and integration ownership are defined by the README.
+
 ## Unreleased
 
 ### Added
+
+- Documented the maintained two-repository architecture with
+  `rabesss/codex-desktop-control`, including setup, provider persistence,
+  `/goal` fork behavior, validation, and remaining Browser backend constraints.
+- Added cross-repository contributor and issue-reporting guidance.
 
 - Auto Router (`codex_shim/router.py`): an optional `Auto (smart routing)` picker
   entry (slug `codex-auto`) that routes each task to the cheapest configured
@@ -69,6 +77,12 @@ and this project does not yet follow semantic versioning (pre-1.0).
 
 ### Changed
 
+- The supported Desktop path is now the package/build integration in
+  `codex-desktop-control`; shim `patch-app` and `restore-app` are documented as
+  legacy overlay compatibility commands.
+- Removed the unimplemented Rust adapter design from the public repository so
+  documentation describes shipped behavior only.
+
 - Reframed the project around a generic all-model Codex shim instead of any
   single upstream app or model store.
 - Made `~/.codex-shim/models.json` the canonical default settings file.
@@ -78,6 +92,11 @@ and this project does not yet follow semantic versioning (pre-1.0).
   exports.
 
 ### Fixed
+
+- Responses namespace tools are flattened for OpenAI-chat and
+  Anthropic-compatible providers, including call history, then restored to
+  their original namespace and child name in returned tool calls. This enables
+  native Desktop Browser tool dispatch through custom routes.
 
 - Anthropic route requests now send only `x-api-key` (plus `anthropic-version`)
   for authentication and no longer also attach `Authorization: Bearer <apiKey>`.

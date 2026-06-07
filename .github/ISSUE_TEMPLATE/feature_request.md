@@ -12,7 +12,8 @@ labels: enhancement
 ## Proposed change
 
 <!-- What should the shim do? Where in the code does it land
-(translate.py, server.py, cli.py, catalog.py)? -->
+(translate.py, server.py, cli.py, catalog.py)? Desktop picker, package, and
+thread lifecycle requests belong in rabesss/codex-desktop-control. -->
 
 ## Alternatives considered
 
@@ -21,7 +22,8 @@ labels: enhancement
 ## Scope
 
 - [ ] New provider translation
-- [ ] New Codex Desktop / CLI compatibility
+- [ ] New Codex wire-protocol compatibility
+- [ ] Companion Desktop integration
 - [ ] CLI / UX
 - [ ] Docs
 - [ ] Other

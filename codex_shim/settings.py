@@ -15,6 +15,8 @@ DEFAULT_CODEX_MODELS_CACHE = Path.home() / ".codex" / "models_cache.json"
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 8765
 PROVIDER_NAME = "codex_shim"
+CLIPROXYAPI_BASE_URL = "http://127.0.0.1:8317/v1"
+CLIPROXYAPI_CREDENTIAL = "CLIPROXY_INTERNAL_API_KEY"
 CHATGPT_MODEL_SLUG = "gpt-5.5"
 FALLBACK_CHATGPT_PASSTHROUGH_SLUGS = (
     "gpt-5.5",
@@ -34,6 +36,7 @@ FALLBACK_CHATGPT_DISPLAY_NAMES = {
     "gpt-5.2": "gpt-5.2",
     "codex-auto-review": "Codex Auto Review",
 }
+_MISSING_CREDENTIAL_WARNED: set[str] = set()
 
 
 def chatgpt_passthrough_available(auth_path: Path | None = None) -> bool:
@@ -316,6 +319,13 @@ def _normalize_model_row(row: dict[str, Any]) -> dict[str, Any]:
         normalized["provider"] = "generic-chat-completion-api"
         if not _field(normalized, "base_url", "baseUrl", "baseURL"):
             normalized["base_url"] = "http://127.0.0.1:11434/v1"
+    if str(normalized.get("provider") or "").strip().lower() == "commandcode":
+        normalized["provider"] = "generic-chat-completion-api"
+        normalized["base_url"] = CLIPROXYAPI_BASE_URL
+        for legacy_key in ("api_key", "apiKey", "bearerToken", "api_key_env", "apiKeyEnv", "api_key_file", "apiKeyFile"):
+            normalized.pop(legacy_key, None)
+        normalized["api_key_credential"] = CLIPROXYAPI_CREDENTIAL
+        normalized.setdefault("provider_display_name", "CLIProxyAPI / CommandCode")
     return normalized
 
 
@@ -339,7 +349,10 @@ def _resolve_api_key_from_row(row: dict[str, Any]) -> str:
 
     env_name = str(_field(row, "api_key_env", "apiKeyEnv", default="") or "").strip()
     if env_name:
-        return os.environ.get(env_name, "").strip()
+        value = os.environ.get(env_name, "").strip()
+        if not value:
+            _warn_missing_credential(f"env:{env_name}", f"environment variable {env_name!r} is not set")
+        return value
 
     credential_name = str(
         _field(row, "api_key_credential", "apiKeyCredential", "credential", "credentialName", default="") or ""
@@ -351,7 +364,8 @@ def _resolve_api_key_from_row(row: dict[str, Any]) -> str:
     if file_name:
         try:
             return Path(file_name).expanduser().read_text().strip()
-        except OSError:
+        except OSError as exc:
+            _warn_missing_credential(f"file:{file_name}", f"credential file {file_name!r} could not be read: {exc}")
             return ""
 
     return ""
@@ -374,11 +388,23 @@ def _resolve_api_key_value(value: str) -> str:
 def _resolve_credential(name: str) -> str:
     credentials_dir = os.environ.get("CREDENTIALS_DIRECTORY", "").strip()
     if credentials_dir:
+        credential_path = Path(credentials_dir) / name
         try:
-            return (Path(credentials_dir) / name).read_text().strip()
+            return credential_path.read_text().strip()
         except OSError:
             pass
-    return os.environ.get(name, "").strip()
+    value = os.environ.get(name, "").strip()
+    if not value:
+        source = f"$CREDENTIALS_DIRECTORY/{name}" if credentials_dir else name
+        _warn_missing_credential(f"credential:{source}", f"credential {source!r} is unavailable")
+    return value
+
+
+def _warn_missing_credential(key: str, message: str) -> None:
+    if key in _MISSING_CREDENTIAL_WARNED:
+        return
+    _MISSING_CREDENTIAL_WARNED.add(key)
+    print(f"[settings] missing credential: {message}", flush=True)
 
 
 def _int_or_none(value: Any) -> int | None:

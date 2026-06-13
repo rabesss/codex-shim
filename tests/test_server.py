@@ -10,6 +10,7 @@ from codex_shim import server as server_module
 from codex_shim.server import (
     ResponsesStreamState,
     ShimServer,
+    _build_tool_types,
     _current_managed_model,
     _join_url,
     _picker_html,
@@ -134,6 +135,22 @@ def test_join_url_handles_versioned_provider_bases():
     assert _join_url("https://example.test", "/chat/completions") == "https://example.test/v1/chat/completions"
 
 
+def test_build_tool_types_preserves_native_and_mcp_types():
+    body = {
+        "tools": [
+            {"type": "apply_patch"},
+            {"type": "web_search_preview"},
+            {"type": "mcp__node_repl", "function": {"name": "js"}},
+        ]
+    }
+
+    tool_types = _build_tool_types(body)
+
+    assert tool_types["apply_patch"] == "apply_patch"
+    assert tool_types["web_search"] == "web_search_preview"
+    assert tool_types["mcp__node_repl__js"] == "mcp__node_repl"
+
+
 async def test_image_generation_routes_to_chatgpt_passthrough_and_rewrites_model(monkeypatch, tmp_path, auth_present):
     captured = {}
 
@@ -188,6 +205,60 @@ async def test_image_generation_routes_to_chatgpt_passthrough_and_rewrites_model
     assert captured["headers"]["Authorization"] == "Bearer stub"
 
     await shim_client.close()
+
+
+async def test_image_generation_uses_byok_when_chatgpt_passthrough_disabled(tmp_path, auth_missing):
+    captured = {}
+
+    async def chat(request):
+        captured["body"] = await request.json()
+        return web.json_response(
+            {
+                "id": "chatcmpl_fake",
+                "choices": [{"message": {"role": "assistant", "content": "no image backend"}}],
+            }
+        )
+
+    upstream = web.Application()
+    upstream.router.add_post("/v1/chat/completions", chat)
+    upstream_client = TestClient(TestServer(upstream))
+    await upstream_client.start_server()
+
+    settings = tmp_path / "settings.json"
+    settings.write_text(
+        json.dumps(
+            {
+                "customModels": [
+                    {
+                        "model": "real-openai",
+                        "displayName": "Real OpenAI",
+                        "provider": "openai",
+                        "baseUrl": str(upstream_client.make_url("/v1")),
+                        "apiKey": "secret",
+                    }
+                ]
+            }
+        )
+    )
+    shim_client = TestClient(TestServer(ShimServer(settings).app()))
+    await shim_client.start_server()
+
+    resp = await shim_client.post(
+        "/v1/responses",
+        json={
+            "model": "real-openai",
+            "input": [{"role": "user", "content": "@image generate a neon fox"}],
+            "tools": [{"type": "image_generation", "name": "image_generation"}],
+        },
+    )
+
+    assert resp.status == 200
+    assert captured["body"]["model"] == "real-openai"
+    payload = await resp.json()
+    assert payload["output"][0]["content"][0]["text"] == "no image backend"
+
+    await shim_client.close()
+    await upstream_client.close()
 
 
 async def test_responses_routes_to_openai_chat(tmp_path):
@@ -329,6 +400,65 @@ async def test_streaming_openai_chat_delta_strips_think_blocks():
     assert completed["response"]["output"][0]["content"][0]["text"] == "Visible  final"
     assert "<think>" not in raw
     assert "secret" not in raw
+
+
+async def test_streaming_openai_error_frame_emits_failed_response():
+    class FakeResponse:
+        def __init__(self):
+            self.chunks: list[bytes] = []
+
+        async def write(self, data: bytes):
+            self.chunks.append(data)
+
+    downstream = FakeResponse()
+    state = ResponsesStreamState("real-openai")
+
+    await state.start(downstream)
+    await state.fail(downstream, {"message": "rate limited", "code": "rate_limit"})
+
+    events = _sse_events(b"".join(downstream.chunks).decode())
+    assert [event.get("type") for event in events] == ["response.created", "response.failed"]
+    assert events[-1]["response"]["status"] == "failed"
+    assert events[-1]["response"]["error"]["message"] == "rate limited"
+
+
+async def test_streaming_tool_item_type_and_namespace_are_restored():
+    class FakeResponse:
+        def __init__(self):
+            self.chunks: list[bytes] = []
+
+        async def write(self, data: bytes):
+            self.chunks.append(data)
+
+    downstream = FakeResponse()
+    state = ResponsesStreamState(
+        "real-openai",
+        {"mcp__codex_apps__github__get_repo": ("mcp__codex_apps__github", "get_repo")},
+        {"apply_patch": "apply_patch", "mcp__codex_apps__github__get_repo": "mcp__codex_apps__github__get_repo"},
+    )
+    await state.start(downstream)
+    await state.write_chat_delta(
+        downstream,
+        {
+            "choices": [
+                {
+                    "delta": {
+                        "tool_calls": [
+                            {"index": 0, "id": "call_1", "function": {"name": "apply_patch", "arguments": "diff"}},
+                            {"index": 1, "id": "call_2", "function": {"name": "mcp__codex_apps__github__get_repo", "arguments": "{}"}},
+                        ]
+                    }
+                }
+            ]
+        },
+    )
+    await state.finish(downstream)
+
+    events = _sse_events(b"".join(downstream.chunks).decode())
+    completed = [event for event in events if event.get("type") == "response.completed"][-1]
+    assert completed["response"]["output"][0]["type"] == "custom_tool_call"
+    assert completed["response"]["output"][1]["namespace"] == "mcp__codex_apps__github"
+    assert completed["response"]["output"][1]["name"] == "get_repo"
 
 
 async def test_streaming_anthropic_response_completed_includes_usage():
@@ -675,6 +805,7 @@ def _picker_settings_file(tmp_path):
                         "provider": "openai",
                         "baseUrl": "http://example.invalid/v1",
                         "apiKey": "k",
+                        "supports_tools": True,
                     },
                     {
                         "model": "deepseek-v4-pro",
@@ -682,6 +813,7 @@ def _picker_settings_file(tmp_path):
                         "provider": "openai",
                         "baseUrl": "http://example.invalid/v1",
                         "apiKey": "k",
+                        "supports_tools": True,
                     },
                 ]
             }

@@ -26,7 +26,9 @@ Workspaces, a hidden workspace browser, or `agent-workspace-linux`.
 - CLIProxyAPI model discovery and Desktop catalog metadata;
 - the loopback Codex Responses API;
 - streaming, compaction, image, and tool translation;
-- namespace-tool flattening and restoration;
+- namespace-tool flattening and restoration for nested and flat MCP tools;
+- native Responses output item type mapping for `apply_patch`, web search, and
+  normal function calls;
 - request-time credential and capability checks.
 
 CLIProxyAPI owns provider routes and provider credentials. Official OpenAI/Codex
@@ -68,6 +70,12 @@ codex-shim start
 codex-shim status
 curl -s http://127.0.0.1:8765/health
 ```
+
+`generate` and `start` write runtime files under
+`${XDG_STATE_HOME:-~/.local/state}/codex-shim` by default, including the
+generated catalog, generated Codex profile, PID file, shim log, and diagnostic
+request dumps. Use `CODEX_SHIM_RUNTIME_DIR=/path/to/state` only for an explicit
+development or test override.
 
 For a durable service, run the same module from a user service and inject
 credentials through an environment file with protected permissions or systemd
@@ -162,12 +170,22 @@ The routing contract is:
 - Desktop preserves the custom model, `modelProvider`, provider config, and
   dynamic tools in `thread/fork`.
 - Desktop refreshes dynamic tools during resume.
-- The shim preserves namespace-tool identity through upstream translation.
+- The shim preserves namespace-tool identity and native Responses tool item
+  type through upstream translation.
 
 If a custom thread works before `/goal` but its child stops reaching the shim,
 the Desktop build is stale. If the child reaches the shim but Browser calls
-return an unsupported tool name, the shim build may be stale or the selected
-provider may not support tools.
+return an unsupported tool name, check three things:
+
+- the shim build includes native tool type mapping and flat MCP namespace
+  restoration;
+- the selected catalog row has `supports_tools: true`;
+- the upstream provider actually emits compatible tool calls.
+
+`web_search` and `computer_use` are native hosted tools. The shim does not
+pretend they are normal BYOK functions unless a real executor exists. Use a
+first-party row for native hosted web search or expose an executable MCP/tool
+fallback.
 
 ## Validation
 
@@ -201,7 +219,9 @@ Then verify through the installed Desktop UI:
 | Shim reports no usable models | Regenerate `models.json` with the discovery credential available and verify request-time credentials. |
 | Custom thread fails only after restart | Restore the durable non-default `[model_providers.codex_shim]` block. |
 | `/goal` child no longer reaches the shim | Rebuild `codex-desktop-control` from current `main`; old fork payloads dropped provider state. |
-| Browser tool is visible but returns `unsupported call` | Update both repos, confirm the provider supports tools, and inspect the returned namespace/name fields. |
+| Browser tool is visible but returns `unsupported call` | Update both repos, confirm the row has `supports_tools: true`, and inspect returned `type`, `namespace`, and `name` fields. |
+| Tool-heavy request routes to a cheap model that cannot call tools | Add `supports_tools` to router candidates and regenerate the catalog; missing values are treated conservatively. |
+| CommandCode rows return `Unsupported model provider: commandcode` | Regenerate `models.json`; current shim also normalizes stale CommandCode rows to local CLIProxyAPI. |
 | Browser opens a link in an uncontrollable new tab | Use explicit navigation for `target="_blank"` links; this is an extension-backend limitation. |
 | Navigation is slow | Allow for the upstream site-status safety check before treating it as a hang. |
 

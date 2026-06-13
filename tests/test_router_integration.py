@@ -160,7 +160,13 @@ def _settings(
     if candidates is None:
         candidates = [
             {"slug": "cheap", "cost": 1, "supports_images": False, "card": "cheap fast single-file edits"},
-            {"slug": "strong", "cost": 5, "supports_images": True, "card": "frontier multi-file refactors, debugging, images"},
+            {
+                "slug": "strong",
+                "cost": 5,
+                "supports_images": True,
+                "supports_tools": True,
+                "card": "frontier multi-file refactors, debugging, images, tools",
+            },
         ]
     settings = tmp_path / "models.json"
     settings.write_text(

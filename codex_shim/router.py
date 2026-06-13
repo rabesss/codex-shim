@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import json
 import os
+import hashlib
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Awaitable, Callable, Optional
@@ -74,6 +75,7 @@ class RouterCandidate:
     cost: float = 1.0
     card: str = ""
     supports_images: bool = False
+    supports_tools: bool = False
 
 
 @dataclass(frozen=True)
@@ -128,13 +130,14 @@ def load_router_config(settings_path: Path | str) -> Optional[RouterConfig]:
         if not slug:
             continue
         candidates.append(
-            RouterCandidate(
-                slug=slug,
-                cost=_as_float(entry.get("cost"), 1.0),
-                card=str(entry.get("card") or "").strip(),
-                supports_images=bool(entry.get("supports_images", False)),
+                RouterCandidate(
+                    slug=slug,
+                    cost=_as_float(entry.get("cost"), 1.0),
+                    card=str(entry.get("card") or "").strip(),
+                    supports_images=bool(entry.get("supports_images", False)),
+                    supports_tools=bool(entry.get("supports_tools", False)),
+                )
             )
-        )
 
     timeout = _as_float(raw.get("timeout"), DEFAULT_TIMEOUT)
     env_timeout = os.environ.get("CODEX_SHIM_ROUTER_TIMEOUT")
@@ -202,7 +205,7 @@ def router_catalog_entry(config: RouterConfig) -> dict[str, Any]:
         "apply_patch_tool_type": "freeform",
         "web_search_tool_type": "text_and_image",
         "supports_search_tool": False,
-        "supports_parallel_tool_calls": True,
+        "supports_parallel_tool_calls": any(candidate.supports_tools for candidate in config.candidates),
         "experimental_supported_tools": [],
         "input_modalities": ["text", "image"],
         "supports_image_detail_original": True,
@@ -316,6 +319,7 @@ def task_signal(body: dict[str, Any]) -> dict[str, Any]:
         "task": latest_user_text(body),
         "has_images": has_images(body),
         "tool_count": len(tools) if isinstance(tools, list) else 0,
+        "has_tools": bool(tools) if isinstance(tools, list) else False,
         "input_items": input_items,
     }
 
@@ -351,6 +355,7 @@ def build_system_prompt(candidates: list[RouterCandidate]) -> str:
         card = c.card or "General-purpose model. No capability card provided."
         lines.append("- slug: %s" % c.slug)
         lines.append("  images: %s" % ("yes" if c.supports_images else "no"))
+        lines.append("  tools: %s" % ("yes" if c.supports_tools else "no"))
         lines.append("  capability: %s" % card)
     schema = {"scores": {c.slug: 0.0 for c in candidates}, "reasoning": "one short sentence"}
     lines += [
@@ -414,13 +419,16 @@ def pick_candidate(
     candidates: list[RouterCandidate],
     threshold: float,
     has_image_task: bool,
+    has_tool_task: bool,
 ) -> tuple[Optional[str], float, str]:
     """Cheapest candidate whose score clears the bar; image-incapable models are
-    hard-zeroed when the task has images; if none clear the bar, take the best."""
+    hard-zeroed when the task has images or tool calls it cannot support."""
     scored: list[tuple[RouterCandidate, float]] = []
     for c in candidates:
         score = scores.get(c.slug, 0.0)
         if has_image_task and not c.supports_images:
+            score = 0.0
+        if has_tool_task and not c.supports_tools:
             score = 0.0
         scored.append((c, score))
     viable = [(c, s) for (c, s) in scored if s >= threshold]
@@ -433,17 +441,30 @@ def pick_candidate(
     return None, 0.0, "no usable score"
 
 
-def fallback_slug(config: RouterConfig, candidates: list[RouterCandidate]) -> Optional[str]:
+def fallback_slug(
+    config: RouterConfig,
+    candidates: list[RouterCandidate],
+    *,
+    has_image_task: bool = False,
+    has_tool_task: bool = False,
+) -> Optional[str]:
     """Deterministic, classifier-free choice: configured default, else cheapest."""
-    if config.default and any(c.slug == config.default for c in candidates):
+    viable = [
+        c
+        for c in candidates
+        if not (has_image_task and not c.supports_images)
+        and not (has_tool_task and not c.supports_tools)
+    ]
+    if config.default and any(c.slug == config.default for c in viable):
         return config.default
-    if candidates:
-        return min(candidates, key=lambda c: float(c.cost or 0)).slug
+    if viable:
+        return min(viable, key=lambda c: float(c.cost or 0)).slug
     return None
 
 
 def _cache_key(signal: dict[str, Any]) -> str:
-    return "%s|%s" % (signal["has_images"], hash(signal["task"]))
+    digest = hashlib.sha256(str(signal["task"]).encode("utf-8")).hexdigest()[:24]
+    return "%s|%s|%s" % (signal["has_images"], signal.get("has_tools", False), digest)
 
 
 def reset_cache() -> None:
@@ -471,10 +492,11 @@ async def resolve_auto(
     try:
         if not candidates:
             return None, {"reason": "no candidates"}
-        if len(candidates) == 1:
-            return candidates[0].slug, {"reason": "single candidate", "scores": {}}
-
         signal = task_signal(body)
+        if len(candidates) == 1:
+            pick = fallback_slug(config, candidates, has_image_task=signal["has_images"], has_tool_task=signal["has_tools"])
+            return pick, {"reason": "single candidate", "scores": {}}
+
         key = _cache_key(signal)
         if config.cache:
             cached = _cache.get(key)
@@ -483,7 +505,7 @@ async def resolve_auto(
                 return cached, {"reason": "cache", "scores": {}}
 
         if classify is None:
-            pick = fallback_slug(config, candidates)
+            pick = fallback_slug(config, candidates, has_image_task=signal["has_images"], has_tool_task=signal["has_tools"])
             _log("[router] no classifier -> deterministic %s" % pick)
             return pick, {"reason": "no classifier", "scores": {}}
 
@@ -492,14 +514,20 @@ async def resolve_auto(
         try:
             raw = await classify(system_prompt, user_content)
         except Exception as exc:  # noqa: BLE001 - any classifier failure is non-fatal
-            pick = fallback_slug(config, candidates)
+            pick = fallback_slug(config, candidates, has_image_task=signal["has_images"], has_tool_task=signal["has_tools"])
             _log("[router] classifier failed (%s); falling back to %s" % (exc, pick))
             return pick, {"reason": "classifier error", "scores": {}}
 
         scores = parse_scores(raw, [c.slug for c in candidates])
-        pick, score, why = pick_candidate(scores, candidates, config.threshold, signal["has_images"])
+        pick, score, why = pick_candidate(
+            scores,
+            candidates,
+            config.threshold,
+            signal["has_images"],
+            signal["has_tools"],
+        )
         if not pick:
-            pick = fallback_slug(config, candidates)
+            pick = fallback_slug(config, candidates, has_image_task=signal["has_images"], has_tool_task=signal["has_tools"])
             why = "empty scores; fallback"
             score = 0.0
         if config.cache and pick:

@@ -223,7 +223,9 @@ def chat_completion_to_response(
     payload: dict[str, Any],
     requested_model: str,
     namespace_call_map: dict[str, tuple[str, str]] | None = None,
+    tool_types: dict[str, str] | None = None,
 ) -> dict[str, Any]:
+    namespace_call_map, tool_types = _normalize_response_tool_maps(namespace_call_map, tool_types)
     choice = (payload.get("choices") or [{}])[0]
     message = choice.get("message") or {}
     output: list[dict[str, Any]] = []
@@ -251,10 +253,11 @@ def chat_completion_to_response(
     for call in message.get("tool_calls") or []:
         fn = call.get("function") or {}
         tool_name = str(fn.get("name", "") or "")
+        item_type = response_tool_item_type(tool_name, tool_types)
         output.append(
             {
                 "id": call.get("id", "call_0"),
-                "type": "function_call",
+                "type": item_type,
                 "status": "completed",
                 "call_id": call.get("id", "call_0"),
                 **response_function_call_name_fields(tool_name, namespace_call_map),
@@ -276,11 +279,13 @@ def anthropic_to_response(
     payload: dict[str, Any],
     requested_model: str,
     namespace_call_map: dict[str, tuple[str, str]] | None = None,
+    tool_types: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     response = chat_completion_to_response(
         anthropic_to_chat_response(payload, requested_model),
         requested_model,
         namespace_call_map,
+        tool_types,
     )
     response["usage"] = normalize_responses_usage(payload.get("usage"))
     return response
@@ -451,27 +456,33 @@ def _responses_input_to_messages(value: Any) -> list[dict[str, Any]]:
         elif item_type == "computer_call_output":
             flush_pending_assistant_tool_calls()
             messages.append({"role": "user", "content": _computer_output_to_chat_content(item)})
-        elif item_type == "function_call":
+        elif item_type in {"function_call", "custom_tool_call", "web_search_call"}:
             # Coalesce consecutive function_call items into a single assistant
             # message with multiple tool_calls so chat-completions upstreams
             # accept the subsequent tool messages.
             call_id = item.get("call_id") or item.get("id") or "call_0"
+            arguments = item.get("arguments")
+            if arguments is None:
+                arguments = item.get("input")
+            if arguments is None:
+                arguments = ""
             pending_tool_calls.append(
                 {
                     "id": call_id,
                     "type": "function",
                     "function": {
                         "name": response_function_call_chat_name(item),
-                        "arguments": item.get("arguments") or "",
+                        "arguments": _jsonish(arguments) if not isinstance(arguments, str) else arguments,
                     },
                 }
             )
         elif item_type == "function_call_output":
             flush_pending_assistant_tool_calls()
             output = item.get("output", "")
-            messages.append({"role": "tool", "tool_call_id": item.get("call_id"), "content": _content_to_text(output)})
+            call_id = item.get("call_id") or item.get("id") or "call_0"
+            messages.append({"role": "tool", "tool_call_id": call_id, "content": _content_to_text(output)})
             if _has_visual_content(output):
-                messages.append({"role": "user", "content": _visual_feedback_chat_content(output, item.get("call_id"))})
+                messages.append({"role": "user", "content": _visual_feedback_chat_content(output, call_id)})
         elif item_type == "reasoning":
             # For Chat-Completions upstreams reasoning is informational only.
             # We keep it as a marker so the Anthropic translator can reattach
@@ -652,23 +663,16 @@ def responses_namespace_call_map(tools: Any) -> dict[str, tuple[str, str]]:
         return {}
     mapping: dict[str, tuple[str, str]] = {}
     for tool in tools:
-        if not isinstance(tool, dict) or tool.get("type") != "namespace":
-            continue
-        namespace_name = _sanitize_mcp_tool_name(str(tool.get("name") or ""))
-        nested_tools = tool.get("tools")
-        if not namespace_name or not isinstance(nested_tools, list):
-            continue
-        for nested_tool in nested_tools:
-            nested_name = _namespace_child_tool_name(nested_tool)
-            if not nested_name:
-                continue
-            if nested_name.startswith(f"{namespace_name}__"):
-                flattened_name = nested_name
-                child_name = nested_name.removeprefix(f"{namespace_name}__")
-            else:
-                flattened_name = _sanitize_mcp_tool_name(f"{namespace_name}__{nested_name}")
-                child_name = nested_name
-            mapping[flattened_name] = (namespace_name, child_name)
+        _collect_namespace_call_map(tool, "", mapping)
+    return mapping
+
+
+def responses_tool_type_map(tools: Any) -> dict[str, str]:
+    if not isinstance(tools, list):
+        return {}
+    mapping: dict[str, str] = {}
+    for tool in tools:
+        _collect_tool_type_map(tool, "", mapping)
     return mapping
 
 
@@ -678,6 +682,10 @@ def response_function_call_name_fields(
 ) -> dict[str, str]:
     if namespace_call_map and chat_name in namespace_call_map:
         namespace, name = namespace_call_map[chat_name]
+        return {"name": name, "namespace": namespace}
+    inferred = _infer_flat_mcp_namespace(chat_name)
+    if inferred:
+        namespace, name = inferred
         return {"name": name, "namespace": namespace}
     return {"name": chat_name}
 
@@ -690,6 +698,134 @@ def response_function_call_chat_name(item: dict[str, Any]) -> str:
             return _sanitize_mcp_tool_name(name)
         return _sanitize_mcp_tool_name(f"{namespace}__{name}")
     return name
+
+
+def response_tool_item_type(chat_name: str, tool_types: dict[str, str] | None = None) -> str:
+    original_type = str((tool_types or {}).get(chat_name) or "").strip().lower()
+    if original_type == "apply_patch":
+        return "custom_tool_call"
+    if original_type.startswith("web_search"):
+        return "web_search_call"
+    return "function_call"
+
+
+def _normalize_response_tool_maps(
+    namespace_call_map: dict[str, tuple[str, str]] | dict[str, str] | None,
+    tool_types: dict[str, str] | None,
+) -> tuple[dict[str, tuple[str, str]] | None, dict[str, str]]:
+    if tool_types is None and namespace_call_map:
+        values = list(namespace_call_map.values())
+        if values and all(isinstance(value, str) for value in values):
+            return None, dict(namespace_call_map)  # Backward-compatible upstream signature.
+    return namespace_call_map if isinstance(namespace_call_map, dict) else None, tool_types or {}
+
+
+def _flatten_namespace_tool(tool: Any, namespace_name: str) -> list[dict[str, Any]]:
+    if not isinstance(tool, dict):
+        return []
+    if tool.get("type") == "namespace":
+        child_namespace = _sanitize_mcp_tool_name(str(tool.get("name") or ""))
+        if child_namespace and not child_namespace.startswith(f"{namespace_name}__"):
+            child_namespace = _sanitize_mcp_tool_name(f"{namespace_name}__{child_namespace}")
+        nested_tools = tool.get("tools")
+        if not child_namespace or not isinstance(nested_tools, list):
+            return []
+        flattened: list[dict[str, Any]] = []
+        for nested_tool in nested_tools:
+            flattened.extend(_flatten_namespace_tool(nested_tool, child_namespace))
+        return flattened
+
+    nested_name = _namespace_child_tool_name(tool)
+    if not nested_name:
+        return []
+    nested_function = _responses_tool_to_chat_function(tool)
+    if not nested_function:
+        return []
+    fn = nested_function.get("function")
+    if not isinstance(fn, dict):
+        return []
+    function_tool = dict(nested_function)
+    function_tool["function"] = dict(fn)
+    if nested_name.startswith(f"{namespace_name}__"):
+        function_tool["function"]["name"] = nested_name
+    else:
+        function_tool["function"]["name"] = _sanitize_mcp_tool_name(f"{namespace_name}__{nested_name}")
+    return [function_tool]
+
+
+def _collect_namespace_call_map(tool: Any, namespace: str, mapping: dict[str, tuple[str, str]]) -> None:
+    if not isinstance(tool, dict):
+        return
+    if tool.get("type") == "namespace":
+        name = _sanitize_mcp_tool_name(str(tool.get("name") or ""))
+        if not name:
+            return
+        next_namespace = name if not namespace or name.startswith(f"{namespace}__") else _sanitize_mcp_tool_name(f"{namespace}__{name}")
+        nested_tools = tool.get("tools")
+        if isinstance(nested_tools, list):
+            for nested_tool in nested_tools:
+                _collect_namespace_call_map(nested_tool, next_namespace, mapping)
+        return
+
+    chat_name = _chat_tool_name_for_mapping(tool, namespace)
+    if chat_name:
+        inferred = _infer_flat_mcp_namespace(chat_name)
+        if inferred:
+            mapping.setdefault(chat_name, inferred)
+        elif namespace:
+            child_name = chat_name.removeprefix(f"{namespace}__") if chat_name.startswith(f"{namespace}__") else _namespace_child_tool_name(tool)
+            if child_name:
+                mapping[chat_name] = (namespace, child_name)
+
+
+def _collect_tool_type_map(tool: Any, namespace: str, mapping: dict[str, str]) -> None:
+    if not isinstance(tool, dict):
+        return
+    if tool.get("type") == "namespace":
+        name = _sanitize_mcp_tool_name(str(tool.get("name") or ""))
+        next_namespace = name if not namespace or name.startswith(f"{namespace}__") else _sanitize_mcp_tool_name(f"{namespace}__{name}")
+        nested_tools = tool.get("tools")
+        if isinstance(nested_tools, list):
+            for nested_tool in nested_tools:
+                _collect_tool_type_map(nested_tool, next_namespace, mapping)
+        return
+    chat_name = _chat_tool_name_for_mapping(tool, namespace)
+    original_type = str(tool.get("type") or "").strip()
+    original_type_lower = original_type.lower()
+    if original_type_lower in {"web_search", "web_search_preview"}:
+        mapping.setdefault("web_search", original_type)
+    elif original_type_lower in {"computer_use", "computer_use_preview"}:
+        mapping.setdefault("computer_use", original_type)
+    elif original_type_lower:
+        mapping.setdefault(original_type_lower, original_type)
+    if chat_name and original_type:
+        mapping[chat_name] = original_type
+
+
+def _chat_tool_name_for_mapping(tool: dict[str, Any], namespace: str = "") -> str:
+    if namespace:
+        child_name = _namespace_child_tool_name(tool)
+        if not child_name:
+            return ""
+        if child_name.startswith(f"{namespace}__"):
+            return child_name
+        return _sanitize_mcp_tool_name(f"{namespace}__{child_name}")
+    function_tool = _responses_tool_to_chat_function(tool)
+    if not function_tool:
+        return ""
+    fn = function_tool.get("function")
+    if not isinstance(fn, dict):
+        return ""
+    return str(fn.get("name") or "")
+
+
+def _infer_flat_mcp_namespace(chat_name: str) -> tuple[str, str] | None:
+    if not chat_name.startswith("mcp__"):
+        return None
+    parts = [part for part in chat_name.split("__") if part]
+    if len(parts) < 3:
+        return None
+    return "__".join(parts[:-1]), parts[-1]
 
 
 def _responses_tool_to_chat_functions(tool: Any) -> list[dict[str, Any]]:
@@ -709,28 +845,15 @@ def _responses_namespace_tool_to_chat_functions(tool: dict[str, Any]) -> list[di
 
     converted = []
     for nested_tool in nested_tools:
-        nested_name = _namespace_child_tool_name(nested_tool)
-        if not nested_name:
-            continue
-        nested_function = _responses_tool_to_chat_function(nested_tool)
-        if not nested_function:
-            continue
-        fn = nested_function.get("function")
-        if not isinstance(fn, dict):
-            continue
-        function_tool = dict(nested_function)
-        function_tool["function"] = dict(fn)
-        if nested_name.startswith(f"{namespace_name}__"):
-            function_tool["function"]["name"] = nested_name
-        else:
-            function_tool["function"]["name"] = _sanitize_mcp_tool_name(f"{namespace_name}__{nested_name}")
-        converted.append(function_tool)
+        converted.extend(_flatten_namespace_tool(nested_tool, namespace_name))
     return converted
 
 
 def _namespace_child_tool_name(tool: Any) -> str:
     if not isinstance(tool, dict):
         return ""
+    if tool.get("type") == "namespace":
+        return _sanitize_mcp_tool_name(str(tool.get("name") or ""))
     nested_function = _responses_tool_to_chat_function(tool)
     if not nested_function:
         return ""
@@ -745,6 +868,9 @@ def _responses_tool_to_chat_function(tool: Any) -> dict[str, Any] | None:
         return None
     if tool.get("type") == "function" and "function" in tool:
         return tool
+    tool_type = str(tool.get("type") or "").strip().lower()
+    if tool_type in {"web_search", "web_search_preview", "computer_use", "computer_use_preview"}:
+        return None
     name = _responses_tool_function_name(tool)
     if not name:
         return None
@@ -759,35 +885,45 @@ def _responses_tool_to_chat_function(tool: Any) -> dict[str, Any] | None:
 
 
 def _responses_tool_function_name(tool: dict[str, Any]) -> str:
+    tool_type = str(tool.get("type") or "").strip()
+    tool_type_lower = tool_type.lower()
+    if tool_type_lower.startswith("mcp"):
+        base = _sanitize_mcp_tool_name(tool_type)
+        child = ""
+        fn = tool.get("function")
+        if isinstance(fn, dict) and fn.get("name"):
+            child = _sanitize_mcp_tool_name(str(fn["name"]))
+        elif tool.get("name"):
+            child = _sanitize_mcp_tool_name(str(tool["name"]))
+        if child and not base.endswith(f"__{child}") and child not in set(base.split("__")):
+            return _sanitize_mcp_tool_name(f"{base}__{child}")
+        return base
     fn = tool.get("function")
     if isinstance(fn, dict) and fn.get("name"):
-        return _sanitize_tool_name(str(fn["name"]))
+        return _sanitize_function_name_for_tool(str(fn["name"]))
     if tool.get("name"):
-        return _sanitize_tool_name(str(tool["name"]))
-    tool_type = str(tool.get("type") or "").strip().lower()
+        return _sanitize_function_name_for_tool(str(tool["name"]))
     aliases = {
-        "web_search": "web_search",
-        "web_search_preview": "web_search",
-        "computer_use": "computer_use",
-        "computer_use_preview": "computer_use",
         "apply_patch": "apply_patch",
         "local_shell": "local_shell",
         "shell": "local_shell",
         "browser": "browser",
         "codex_app": "codex_app",
     }
-    if tool_type in aliases:
-        return aliases[tool_type]
-    if tool_type.startswith("codex_app__"):
-        return _sanitize_tool_name(tool_type)
-    if tool_type.startswith("mcp"):
-        return _sanitize_mcp_tool_name(tool_type)
+    if tool_type_lower in aliases:
+        return aliases[tool_type_lower]
+    if tool_type_lower.startswith("codex_app__"):
+        return _sanitize_tool_name(tool_type_lower)
     return ""
 
 
 def _sanitize_mcp_tool_name(name: str) -> str:
     clean = re.sub(r"[^a-zA-Z0-9_@.-]+", "_", name.strip())[:128]
     return clean.strip("_") or "tool"
+
+
+def _sanitize_function_name_for_tool(name: str) -> str:
+    return _sanitize_mcp_tool_name(name) if name.strip().startswith("mcp__") else _sanitize_tool_name(name)
 
 
 def _sanitize_tool_name(name: str) -> str:
@@ -861,12 +997,12 @@ def _responses_tool_choice_to_chat(tool_choice: Any, tools: Any) -> Any:
         if tool_choice in {"auto", "none", "required"}:
             return tool_choice
         name = _tool_choice_name(tool_choice, tools)
-        return {"type": "function", "function": {"name": name}} if name else tool_choice
+        return {"type": "function", "function": {"name": name}} if name else None
     if isinstance(tool_choice, dict):
         if tool_choice.get("type") == "function" and "function" in tool_choice:
             return tool_choice
         name = _tool_choice_name(str(tool_choice.get("name") or tool_choice.get("type") or ""), tools)
-        return {"type": "function", "function": {"name": name}} if name else tool_choice
+        return {"type": "function", "function": {"name": name}} if name else None
     return tool_choice
 
 
@@ -885,7 +1021,7 @@ def _tool_choice_name(choice: str, tools: Any) -> str:
                 names.add(str(fn.get("name") or "").lower())
             if choice in names:
                 return _responses_tool_function_name(tool)
-    return _sanitize_tool_name(choice)
+    return ""
 
 
 def _responses_tools_to_anthropic_tools(tools: Any) -> list[dict[str, Any]]:

@@ -223,7 +223,7 @@ def test_desktop_model_matrix_keeps_xiaomi_mimo_token_plan_text_only():
     assert mimo["base_url"] == "http://127.0.0.1:8317/v1"
     assert mimo["api_key_credential"] == "CLIPROXY_INTERNAL_API_KEY"
     assert mimo["no_image_support"] is True
-    assert mimo["supports_tools"] is True
+    assert mimo["supports_tools"] is False
     assert mimo["supports_reasoning"] is False
 
     image_capable = rows["minimax-coding-minimax-m3"]
@@ -287,6 +287,38 @@ def test_commandcode_settings_row_loads_as_cliproxyapi_route(monkeypatch, tmp_pa
     [model] = ModelSettings(settings).load()
 
     assert model.is_openai_chat is True
+    assert model.api_key == "cpa-secret"
+
+
+def test_stale_commandcode_settings_row_is_normalized_to_cliproxyapi(monkeypatch, tmp_path):
+    credential_dir = tmp_path / "credentials"
+    credential_dir.mkdir()
+    (credential_dir / "CLIPROXY_INTERNAL_API_KEY").write_text("cpa-secret\n")
+
+    settings = tmp_path / "settings.json"
+    settings.write_text(
+        json.dumps(
+            {
+                "models": [
+                    {
+                        "slug": "commandcode-deepseek-v4-pro",
+                        "model": "deepseek/deepseek-v4-pro",
+                        "display_name": "DeepSeek V4 Pro",
+                        "provider": "commandcode",
+                        "base_url": "https://api.commandcode.ai",
+                        "api_key_credential": "COMMANDCODE_API_KEY",
+                    }
+                ]
+            }
+        )
+    )
+
+    monkeypatch.setenv("CREDENTIALS_DIRECTORY", str(credential_dir))
+    [model] = ModelSettings(settings).load()
+
+    assert model.provider == "generic-chat-completion-api"
+    assert model.base_url == "http://127.0.0.1:8317/v1"
+    assert model.raw["api_key_credential"] == "CLIPROXY_INTERNAL_API_KEY"
     assert model.api_key == "cpa-secret"
 
 

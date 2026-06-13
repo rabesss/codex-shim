@@ -5,6 +5,7 @@ from codex_shim.translate import (
     anthropic_to_response,
     chat_completion_to_response,
     responses_namespace_call_map,
+    responses_tool_type_map,
     responses_to_anthropic,
     responses_to_chat,
 )
@@ -159,6 +160,42 @@ def test_responses_namespace_tools_flatten_to_callable_names():
     assert out["tools"][0]["function"]["parameters"]["required"] == ["code"]
 
 
+def test_responses_nested_namespace_tools_flatten_leaf_functions():
+    body = {
+        "model": "slug",
+        "input": "Read a repo",
+        "tools": [
+            {
+                "type": "namespace",
+                "name": "mcp__codex_apps",
+                "tools": [
+                    {
+                        "type": "namespace",
+                        "name": "github",
+                        "tools": [
+                            {
+                                "type": "function",
+                                "name": "get_repo",
+                                "description": "Get a repo.",
+                                "parameters": {"type": "object", "properties": {"name": {"type": "string"}}},
+                            }
+                        ],
+                    }
+                ],
+            }
+        ],
+    }
+
+    out = responses_to_chat(body, "real-model")
+
+    assert [tool["function"]["name"] for tool in out["tools"]] == [
+        "mcp__codex_apps__github__get_repo"
+    ]
+    assert responses_namespace_call_map(body["tools"]) == {
+        "mcp__codex_apps__github__get_repo": ("mcp__codex_apps__github", "get_repo")
+    }
+
+
 def test_responses_namespace_function_call_history_flattens_to_chat_name():
     body = {
         "model": "slug",
@@ -201,7 +238,7 @@ def test_mcp_tool_names_preserve_at_sign():
     assert out["tools"][0]["function"]["name"] == "mcp__plugin@browser__navigate"
 
 
-def test_native_responses_tools_get_function_fallbacks_for_byok_chat():
+def test_native_responses_tools_filter_unexecutable_server_side_tools_for_byok_chat():
     body = {
         "model": "slug",
         "input": "Use the browser",
@@ -217,25 +254,22 @@ def test_native_responses_tools_get_function_fallbacks_for_byok_chat():
     out = responses_to_chat(body, "real-model")
 
     functions = [tool["function"] for tool in out["tools"]]
-    assert [fn["name"] for fn in functions] == ["computer_use", "web_search", "apply_patch", "list_mcp_resources"]
-    assert functions[0]["parameters"]["required"] == ["action"]
-    assert functions[1]["parameters"]["required"] == ["query"]
-    assert functions[2]["parameters"]["required"] == ["patch"]
-    assert out["tool_choice"] == {"type": "function", "function": {"name": "computer_use"}}
+    assert [fn["name"] for fn in functions] == ["apply_patch", "list_mcp_resources"]
+    assert functions[0]["parameters"]["required"] == ["patch"]
+    assert "tool_choice" not in out
 
 
-def test_native_responses_tools_get_anthropic_fallbacks():
+def test_native_responses_tools_filter_unexecutable_server_side_tools_for_anthropic():
     body = {
         "model": "slug",
         "input": "Search",
-        "tools": [{"type": "web_search_preview"}, {"type": "computer_use_preview"}],
+        "tools": [{"type": "web_search_preview"}, {"type": "computer_use_preview"}, {"type": "apply_patch"}],
     }
 
     out = responses_to_anthropic(body, "claude-real", 123)
 
-    assert [tool["name"] for tool in out["tools"]] == ["web_search", "computer_use"]
-    assert out["tools"][0]["input_schema"]["required"] == ["query"]
-    assert out["tools"][1]["input_schema"]["required"] == ["action"]
+    assert [tool["name"] for tool in out["tools"]] == ["apply_patch"]
+    assert out["tools"][0]["input_schema"]["required"] == ["patch"]
 
 
 def test_responses_to_anthropic_messages():
@@ -313,6 +347,39 @@ def test_function_call_output_visual_feedback_adds_followup_image_message():
             {"type": "image_url", "image_url": {"url": "data:image/png;base64,CCC"}},
         ],
     }
+
+
+def test_custom_and_web_search_call_history_roundtrips_to_chat_tools():
+    body = {
+        "model": "slug",
+        "input": [
+            {"type": "custom_tool_call", "call_id": "call_patch", "name": "apply_patch", "input": "*** Begin Patch\n*** End Patch"},
+            {"type": "web_search_call", "call_id": "call_search", "name": "web_search", "arguments": "{\"query\":\"codex\"}"},
+            {"type": "function_call_output", "output": "done"},
+        ],
+    }
+
+    out = responses_to_chat(body, "real-model")
+
+    assert out["messages"] == [
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {
+                    "id": "call_patch",
+                    "type": "function",
+                    "function": {"name": "apply_patch", "arguments": "*** Begin Patch\n*** End Patch"},
+                },
+                {
+                    "id": "call_search",
+                    "type": "function",
+                    "function": {"name": "web_search", "arguments": "{\"query\":\"codex\"}"},
+                },
+            ],
+        },
+        {"role": "tool", "tool_call_id": "call_0", "content": "done"},
+    ]
 
 
 def test_responses_to_anthropic_preserves_visual_feedback_as_image_blocks():
@@ -412,6 +479,61 @@ def test_chat_completion_to_response_restores_namespace_tool_call_fields():
             "namespace": "mcp__node_repl",
             "arguments": "{\"code\":\"1+1\"}",
         }
+    ]
+
+
+def test_chat_completion_to_response_restores_flat_mcp_namespace_tool_call_fields():
+    payload = {
+        "id": "chatcmpl_1",
+        "choices": [
+            {
+                "message": {
+                    "role": "assistant",
+                    "content": "",
+                    "tool_calls": [
+                        {
+                            "id": "call_1",
+                            "type": "function",
+                            "function": {"name": "mcp__codex_apps__github__get_repo", "arguments": "{}"},
+                        }
+                    ],
+                }
+            }
+        ],
+    }
+
+    out = chat_completion_to_response(payload, "slug")
+
+    assert out["output"][0]["name"] == "get_repo"
+    assert out["output"][0]["namespace"] == "mcp__codex_apps__github"
+
+
+def test_chat_completion_to_response_preserves_native_tool_item_types():
+    tools = [{"type": "apply_patch"}, {"type": "web_search_preview"}, {"type": "local_shell"}]
+    payload = {
+        "id": "chatcmpl_1",
+        "choices": [
+            {
+                "message": {
+                    "role": "assistant",
+                    "content": "",
+                    "tool_calls": [
+                        {"id": "call_1", "type": "function", "function": {"name": "apply_patch", "arguments": "diff"}},
+                        {"id": "call_2", "type": "function", "function": {"name": "web_search", "arguments": "{}"}},
+                        {"id": "call_3", "type": "function", "function": {"name": "local_shell", "arguments": "{}"}},
+                    ],
+                }
+            }
+        ],
+    }
+
+    tool_types = responses_tool_type_map(tools)
+    out = chat_completion_to_response(payload, "slug", responses_namespace_call_map(tools), tool_types)
+
+    assert [item["type"] for item in out["output"]] == [
+        "custom_tool_call",
+        "web_search_call",
+        "function_call",
     ]
 
 

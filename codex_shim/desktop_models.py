@@ -32,6 +32,14 @@ SKIPPED_DISCOVERY_OWNERS = {
     "cursor-xiaomi-mimo",
 }
 NON_CHAT_MODEL_MARKERS = ("imagine", "image-quality", "video")
+TOOL_CAPABLE_OWNERS = {
+    "zai-coding",
+    "minimax-coding",
+    "opencode-go",
+    "opencode-zen",
+    "crofai",
+    "commandcode",
+}
 
 BOOTSTRAP_MODELS: tuple[tuple[str, str], ...] = (
     ("zai-coding", "glm-5.1"),
@@ -208,7 +216,7 @@ def _cliproxyapi_rows(
             or not _looks_like_chat_model(model_id)
         ):
             continue
-        generated_row = _row_from_cliproxyapi(owner=owner, model_id=model_id, index=index)
+        generated_row = _row_from_cliproxyapi(owner=owner, model_id=model_id, index=index, raw=row)
         slug = generated_row["slug"]
         if slug in seen_slugs:
             slug = f"{slug}-{index}"
@@ -234,8 +242,8 @@ def _looks_like_chat_model(model_id: str) -> bool:
     return not any(marker in lower for marker in NON_CHAT_MODEL_MARKERS)
 
 
-def _row_from_cliproxyapi(*, owner: str, model_id: str, index: int) -> dict[str, Any]:
-    caps = _capabilities(owner, model_id)
+def _row_from_cliproxyapi(*, owner: str, model_id: str, index: int, raw: dict[str, Any] | None = None) -> dict[str, Any]:
+    caps = _capabilities(owner, model_id, raw=raw)
     route_label = OWNER_LABELS.get(owner, _label_from_slug(owner))
     return {
         "slug": _route_slug(owner, model_id),
@@ -258,19 +266,44 @@ def _row_from_cliproxyapi(*, owner: str, model_id: str, index: int) -> dict[str,
     }
 
 
-def _capabilities(owner: str, model_id: str) -> dict[str, Any]:
+def _capabilities(owner: str, model_id: str, raw: dict[str, Any] | None = None) -> dict[str, Any]:
     caps = {
         "context": 128_000,
         "output": 32_768,
         "image": False,
-        "tools": True,
+        "tools": owner in TOOL_CAPABLE_OWNERS,
         "reasoning": False,
         "streaming": True,
     }
     if owner == "xai":
         caps.update({"context": 200_000, "output": 30_000, "image": model_id.startswith("grok-4")})
+    if raw is not None:
+        raw_tools = _raw_bool(raw, "supports_tools", "supportsTools", "tool_calls", "toolCalls")
+        if raw_tools is not None:
+            caps["tools"] = raw_tools
+        raw_streaming = _raw_bool(raw, "supports_streaming", "supportsStreaming")
+        if raw_streaming is not None:
+            caps["streaming"] = raw_streaming
     caps.update(CAPABILITY_OVERRIDES.get((owner, model_id), {}))
     return caps
+
+
+def _raw_bool(row: dict[str, Any], *keys: str) -> bool | None:
+    for key in keys:
+        if key not in row:
+            continue
+        value = row[key]
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, str):
+            lowered = value.strip().lower()
+            if lowered in {"1", "true", "yes", "on"}:
+                return True
+            if lowered in {"0", "false", "no", "off"}:
+                return False
+        if isinstance(value, (int, float)):
+            return bool(value)
+    return None
 
 
 def _route_slug(owner: str, model_id: str) -> str:

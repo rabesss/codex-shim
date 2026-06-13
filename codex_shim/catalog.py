@@ -34,7 +34,7 @@ def catalog_entry(model: ShimModel) -> dict:
     truncation = model.truncation_limit or min(64_000, max(8_000, int(context * 0.32)))
     reasoning = _reasoning_effort(model)
     supports_reasoning = _raw_bool(model, "supports_reasoning", default=True)
-    supports_tools = _raw_bool(model, "supports_tools", default=True)
+    supports_tools = _raw_bool(model, "supports_tools", default=False)
     provider_label = _provider_label(model)
     visual_name = _with_provider_prefix(model.display_name, provider_label)
     return {

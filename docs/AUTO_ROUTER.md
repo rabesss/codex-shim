@@ -116,8 +116,10 @@ your models):
     "cache": true,
     "candidates": [
       { "slug": "minimax-m3", "cost": 0.3, "supports_images": false,
+        "supports_tools": true,
         "card": "Very cheap, fast. Strong on single-file edits, codegen from a clear spec, simple refactors, data wrangling. Weak on big multi-file refactors, subtle debugging, niche domains." },
       { "slug": "opus", "cost": 5.0, "supports_images": true,
+        "supports_tools": true,
         "card": "Frontier reasoning + agentic coding. Best for the hardest work: large multi-file refactors, subtle debugging, architecture, long autonomous workflows, and image tasks." }
     ]
   }
@@ -153,6 +155,7 @@ The `router` block in your settings file:
 | `candidates[].slug` | Must match a model slug, ChatGPT passthrough slug, or Cursor passthrough slug. Unusable ones are silently skipped. |
 | `candidates[].cost` | A **relative** weight; units don't matter, only the ordering. Lowest cost among the "good enough" candidates wins. |
 | `candidates[].supports_images` | If `false`, the candidate is hard-scored `0` whenever the task includes images. |
+| `candidates[].supports_tools` | If `false` or omitted, the candidate is hard-scored `0` whenever the request includes tools. Set this only for routes verified to emit compatible tool calls. |
 | `candidates[].card` | The capability description the classifier reads. **This is the single most important field** — be honest about strengths and weaknesses; that's what makes routing smart. |
 
 ### The capability card is where the intelligence lives
@@ -179,7 +182,8 @@ routing.
 | `CODEX_SHIM_ROUTER_LOG` | unset | Set `1` to log every routing decision + the raw scores. |
 
 **Watch it decide:** run with `CODEX_SHIM_ROUTER_LOG=1` and tail the shim log
-(`.codex-shim/shim.log`). Each task prints a line like:
+(`${XDG_STATE_HOME:-~/.local/state}/codex-shim/shim.log` by default). Each task
+prints a line like:
 
 ```
 [router] -> opus (score=0.93; score>=0.70, cheapest) scores={"minimax-m3": 0.55, "opus": 0.93}
@@ -200,6 +204,7 @@ tasks escalate and tune `threshold` / cards accordingly.
 | A candidate's backend isn't usable | That candidate is skipped; routing continues with the rest. |
 | Only one candidate available | Routes straight to it (no classifier call). |
 | Task has images, candidate can't | That candidate is scored `0` (can't win). |
+| Request includes tools, candidate can't | That candidate is scored `0` (can't win). |
 | Router disabled but `codex-auto` somehow requested | The slug isn't advertised; an explicit request falls through to the cheapest candidate. |
 
 ---

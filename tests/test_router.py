@@ -28,7 +28,7 @@ def auth_missing(monkeypatch, tmp_path):
 
 CANDIDATES = [
     router.RouterCandidate(slug="cheap", cost=1.0, card="cheap fast model", supports_images=False),
-    router.RouterCandidate(slug="strong", cost=5.0, card="frontier model", supports_images=True),
+    router.RouterCandidate(slug="strong", cost=5.0, card="frontier model", supports_images=True, supports_tools=True),
 ]
 
 
@@ -52,7 +52,13 @@ def _settings_with_router(tmp_path, upstream_v1, *, cache=False, enabled=True, c
                     "cache": cache,
                     "candidates": [
                         {"slug": "cheap", "cost": 1, "supports_images": False, "card": "cheap fast single-file edits"},
-                        {"slug": "strong", "cost": 5, "supports_images": True, "card": "frontier multi-file refactors, debugging, images"},
+                        {
+                            "slug": "strong",
+                            "cost": 5,
+                            "supports_images": True,
+                            "supports_tools": True,
+                            "card": "frontier multi-file refactors, debugging, images, tools",
+                        },
                     ],
                 },
             }
@@ -73,6 +79,7 @@ def test_load_router_config_parses_block(tmp_path):
     assert config.threshold == 0.7
     assert [c.slug for c in config.candidates] == ["cheap", "strong"]
     assert config.candidates[1].supports_images is True
+    assert config.candidates[1].supports_tools is True
 
 
 def test_load_router_config_absent_returns_none(tmp_path):
@@ -127,6 +134,7 @@ def test_task_signal_counts_tools_and_items():
     signal = router.task_signal(body)
     assert signal["task"] == "do it"
     assert signal["tool_count"] == 2
+    assert signal["has_tools"] is True
     assert signal["input_items"] == 1
     assert signal["has_images"] is False
 
@@ -147,26 +155,32 @@ def test_parse_scores_handles_garbage():
 
 def test_pick_candidate_prefers_cheapest_viable():
     scores = {"cheap": 0.9, "strong": 0.95}
-    slug, score, why = router.pick_candidate(scores, CANDIDATES, 0.7, has_image_task=False)
+    slug, score, why = router.pick_candidate(scores, CANDIDATES, 0.7, has_image_task=False, has_tool_task=False)
     assert slug == "cheap"
     assert score == 0.9
 
 
 def test_pick_candidate_escalates_when_cheap_below_bar():
     scores = {"cheap": 0.4, "strong": 0.95}
-    slug, _score, _why = router.pick_candidate(scores, CANDIDATES, 0.7, has_image_task=False)
+    slug, _score, _why = router.pick_candidate(scores, CANDIDATES, 0.7, has_image_task=False, has_tool_task=False)
     assert slug == "strong"
 
 
 def test_pick_candidate_hard_zeros_image_incapable():
     scores = {"cheap": 0.99, "strong": 0.8}
-    slug, _score, _why = router.pick_candidate(scores, CANDIDATES, 0.7, has_image_task=True)
+    slug, _score, _why = router.pick_candidate(scores, CANDIDATES, 0.7, has_image_task=True, has_tool_task=False)
+    assert slug == "strong"
+
+
+def test_pick_candidate_hard_zeros_tool_incapable():
+    scores = {"cheap": 0.99, "strong": 0.8}
+    slug, _score, _why = router.pick_candidate(scores, CANDIDATES, 0.7, has_image_task=False, has_tool_task=True)
     assert slug == "strong"
 
 
 def test_pick_candidate_below_bar_takes_best():
     scores = {"cheap": 0.5, "strong": 0.6}
-    slug, _score, why = router.pick_candidate(scores, CANDIDATES, 0.7, has_image_task=False)
+    slug, _score, why = router.pick_candidate(scores, CANDIDATES, 0.7, has_image_task=False, has_tool_task=False)
     assert slug == "strong"
     assert "below bar" in why
 
@@ -177,11 +191,13 @@ def test_fallback_slug_uses_default_then_cheapest():
         threshold=0.7, default="strong", cache=True, candidates=tuple(CANDIDATES), timeout=12.0, max_tokens=600,
     )
     assert router.fallback_slug(config, list(CANDIDATES)) == "strong"
+    assert router.fallback_slug(config, list(CANDIDATES), has_tool_task=True) == "strong"
     config_no_default = router.RouterConfig(
         enabled=True, slug="codex-auto", display_name="Auto", classifier=None,
         threshold=0.7, default=None, cache=True, candidates=tuple(CANDIDATES), timeout=12.0, max_tokens=600,
     )
     assert router.fallback_slug(config_no_default, list(CANDIDATES)) == "cheap"
+    assert router.fallback_slug(config_no_default, list(CANDIDATES), has_tool_task=True) == "strong"
 
 
 # ---------------------------------------------------------------------------

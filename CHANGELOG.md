@@ -22,9 +22,11 @@ Current platform support and integration ownership are defined by the README.
   model that can handle it. A cheap classifier model scores every candidate
   `0.0–1.0` from a capability card, the shim picks the cheapest candidate whose
   score clears `threshold` (default `0.7`), caches the decision per task, and
-  falls back safely on any error. Configured via an optional `router` block in
-  `~/.codex-shim/models.json`; gated in `/health`, `/v1/models`, `/api/models`,
-  the generated catalog, and `codex-shim list`. Env knobs:
+  falls back safely on any error. Candidates now declare `supports_tools`; tool
+  requests hard-zero candidates that are not verified tool-call routes.
+  Configured via an optional `router` block in `~/.codex-shim/models.json`;
+  gated in `/health`, `/v1/models`, `/api/models`, the generated catalog, and
+  `codex-shim list`. Env knobs:
   `CODEX_SHIM_DISABLE_ROUTER`, `CODEX_SHIM_ROUTER_TIMEOUT`,
   `CODEX_SHIM_ROUTER_MAX_TOKENS`, `CODEX_SHIM_ROUTER_LOG`. Documented in
   `docs/AUTO_ROUTER.md` with a runnable offline proof at
@@ -41,10 +43,11 @@ Current platform support and integration ownership are defined by the README.
   native ChatGPT compact endpoint; BYOK OpenAI/chat and Anthropic routes run a
   non-streaming compact summarization request and return a Responses-shaped
   compacted window for the next Codex turn.
-- BYOK fallback schemas for native Responses-only tools: `computer_use`,
-  `web_search`, `apply_patch`, and `local_shell` now translate into ordinary
-  function tools for chat-completions / Anthropic providers instead of being
-  dropped. Codex MCP function tools continue to pass through unchanged.
+- BYOK fallback schemas for executable native Responses tools such as
+  `apply_patch` and `local_shell`. Server-side hosted tools such as
+  `web_search` and `computer_use` are no longer advertised as fake functions
+  without an executor. Codex MCP function tools continue to pass through
+  unchanged.
 - Streaming `response.completed` events now include upstream `usage` when chat
   or Anthropic streams provide it, so Codex can track token counts and trigger
   auto-compaction.
@@ -74,6 +77,9 @@ Current platform support and integration ownership are defined by the README.
   `.codex-shim/last_request.json` to make strict-provider tokenization /
   schema errors easier to triage. Upstream error bodies are now logged with
   the model slug before being forwarded back.
+- Best-effort dump of the last incoming Responses body to
+  `.codex-shim/last_incoming_request.json`, before translation, so Desktop tool
+  serialization can be diagnosed separately from forwarded provider payloads.
 
 ### Changed
 
@@ -97,6 +103,26 @@ Current platform support and integration ownership are defined by the README.
   Anthropic-compatible providers, including call history, then restored to
   their original namespace and child name in returned tool calls. This enables
   native Desktop Browser tool dispatch through custom routes.
+- Native tool-call output item types are preserved for both streaming and
+  non-streaming Responses translation. `apply_patch` returns as
+  `custom_tool_call`, web-search calls return as `web_search_call`, and normal
+  executable/MCP tools remain `function_call`.
+- Flat MCP tool names such as `mcp__codex_apps__github__get_repo` now recover
+  `namespace` and child `name` even when Desktop did not send a nested
+  namespace object.
+- Nested namespace trees are flattened recursively instead of dropping leaf
+  tools.
+- Stale `provider: commandcode` settings rows now normalize to the local
+  CLIProxyAPI OpenAI-compatible route and internal credential reference.
+- Mid-stream upstream OpenAI/Anthropic error frames now emit `response.failed`
+  instead of a fake empty `response.completed`.
+- Image-generation intent only routes to ChatGPT passthrough when that
+  passthrough is explicitly enabled and authenticated; otherwise BYOK routing
+  continues normally.
+- CLI runtime files now default to
+  `${XDG_STATE_HOME:-~/.local/state}/codex-shim`, and the daemon starts from
+  that state directory. This keeps non-editable installs and systemd services
+  from writing PID/log/request dump files into a source checkout.
 
 - Anthropic route requests now send only `x-api-key` (plus `anthropic-version`)
   for authentication and no longer also attach `Authorization: Bearer <apiKey>`.

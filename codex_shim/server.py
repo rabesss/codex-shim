@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import sys
 import time
@@ -51,12 +52,19 @@ from .translate import (
     chat_to_anthropic,
     normalize_responses_usage,
     response_function_call_name_fields,
+    response_tool_item_type,
     responses_namespace_call_map,
+    responses_tool_type_map,
     responses_to_anthropic,
     responses_to_chat,
 )
 
-DEBUG_DIR = Path(__file__).resolve().parents[1] / ".codex-shim"
+if _runtime_dir := os.environ.get("CODEX_SHIM_RUNTIME_DIR"):
+    DEBUG_DIR = Path(_runtime_dir).expanduser()
+elif _xdg_state_home := os.environ.get("XDG_STATE_HOME"):
+    DEBUG_DIR = Path(_xdg_state_home).expanduser() / "codex-shim"
+else:
+    DEBUG_DIR = Path.home() / ".local" / "state" / "codex-shim"
 CODEX_CONFIG_PATH = Path.home() / ".codex" / "codex-shim.config.toml"
 API_MODELS_CORS_ALLOW_HEADERS = (
     "accept, authorization, content-type, x-requested-with, "
@@ -233,6 +241,7 @@ class ShimServer:
     async def responses(self, request: web.Request) -> web.StreamResponse:
         body = await request.json()
         _log_incoming_request("/v1/responses", body)
+        _dump_incoming_request("/v1/responses", body)
         body = await self._maybe_apply_auto_router(body)
         model = str(body.get("model") or "")
         if is_chatgpt_passthrough_slug(model):
@@ -251,9 +260,11 @@ class ShimServer:
                 response_model_override=model,
                 upstream_model=cursor_upstream_model(model),
             )
-        if self._needs_image_gen(body) or self._needs_image_followup(body):
+        if (self._needs_image_gen(body) or self._needs_image_followup(body)) and chatgpt_passthrough_available():
             return await self._chatgpt_passthrough(request, body, response_model_override=model)
         route = self._route(body)
+        namespace_call_map = responses_namespace_call_map(body.get("tools"))
+        tool_types = _build_tool_types(body)
         if route.is_openai_chat:
             forwarded = responses_to_chat(body, route.model)
             return await self._post_openai_chat(
@@ -261,7 +272,8 @@ class ShimServer:
                 route,
                 forwarded,
                 as_responses=True,
-                namespace_call_map=responses_namespace_call_map(body.get("tools")),
+                namespace_call_map=namespace_call_map,
+                tool_types=tool_types,
             )
         if route.is_anthropic:
             forwarded = responses_to_anthropic(body, route.model, route.max_output_tokens)
@@ -270,13 +282,15 @@ class ShimServer:
                 route,
                 forwarded,
                 as_responses=True,
-                namespace_call_map=responses_namespace_call_map(body.get("tools")),
+                namespace_call_map=namespace_call_map,
+                tool_types=tool_types,
             )
         raise web.HTTPBadGateway(text=f"Unsupported model provider: {route.provider}")
 
     async def responses_compact(self, request: web.Request) -> web.StreamResponse:
         body = await request.json()
         _log_incoming_request("/v1/responses/compact", body)
+        _dump_incoming_request("/v1/responses/compact", body)
         body = await self._maybe_apply_auto_router(body)
         model = str(body.get("model") or "")
         if is_chatgpt_passthrough_slug(model):
@@ -298,6 +312,8 @@ class ShimServer:
             )
         route = self._route(body)
         compact_body = _compact_request_body(body, route.model)
+        namespace_call_map = responses_namespace_call_map(compact_body.get("tools"))
+        tool_types = _build_tool_types(compact_body)
         if route.is_openai_chat:
             forwarded = responses_to_chat(compact_body, route.model)
             forwarded["stream"] = False
@@ -306,7 +322,8 @@ class ShimServer:
                 route,
                 forwarded,
                 as_responses=True,
-                namespace_call_map=responses_namespace_call_map(compact_body.get("tools")),
+                namespace_call_map=namespace_call_map,
+                tool_types=tool_types,
             )
             return await _as_compact_response(response, route.slug)
         if route.is_anthropic:
@@ -317,7 +334,8 @@ class ShimServer:
                 route,
                 forwarded,
                 as_responses=True,
-                namespace_call_map=responses_namespace_call_map(compact_body.get("tools")),
+                namespace_call_map=namespace_call_map,
+                tool_types=tool_types,
             )
             return await _as_compact_response(response, route.slug)
         raise web.HTTPBadGateway(text=f"Unsupported model provider: {route.provider}")
@@ -714,7 +732,15 @@ class ShimServer:
                 classify = self._make_classifier(classifier_model, config)
         log = (lambda message: print(message, flush=True)) if router_module.router_log_enabled() else None
         resolved, _info = await router_module.resolve_auto(config, candidates, body, classify, log=log)
-        return resolved or router_module.fallback_slug(config, candidates)
+        if resolved:
+            return resolved
+        signal = router_module.task_signal(body)
+        return router_module.fallback_slug(
+            config,
+            candidates,
+            has_image_task=signal["has_images"],
+            has_tool_task=signal["has_tools"],
+        )
 
     def _make_classifier(self, model: ShimModel, config):
         timeout = ClientTimeout(total=config.timeout + 5, sock_connect=config.timeout, sock_read=config.timeout)
@@ -773,6 +799,7 @@ class ShimServer:
         body: dict[str, Any],
         as_responses: bool,
         namespace_call_map: dict[str, tuple[str, str]] | None = None,
+        tool_types: dict[str, str] | None = None,
     ) -> web.StreamResponse:
         url = _join_url(route.base_url, "/chat/completions")
         headers = _openai_headers(route)
@@ -782,10 +809,10 @@ class ShimServer:
             if upstream.status >= 400:
                 return await _error_response(upstream, slug=route.slug)
             if body.get("stream"):
-                return await self._stream_openai_chat(request, upstream, route, as_responses, namespace_call_map)
+                return await self._stream_openai_chat(request, upstream, route, as_responses, namespace_call_map, tool_types)
             payload = await upstream.json(content_type=None)
         if as_responses:
-            return web.json_response(chat_completion_to_response(payload, route.slug, namespace_call_map))
+            return web.json_response(chat_completion_to_response(payload, route.slug, namespace_call_map, tool_types))
         return web.json_response(payload)
 
     async def _post_anthropic(
@@ -795,18 +822,19 @@ class ShimServer:
         body: dict[str, Any],
         as_responses: bool,
         namespace_call_map: dict[str, tuple[str, str]] | None = None,
+        tool_types: dict[str, str] | None = None,
     ) -> web.StreamResponse:
         url = _join_url(route.base_url, "/messages")
         headers = _anthropic_headers(route)
         async with ClientSession(timeout=self.timeout) as session:
             upstream = await session.post(url, json=body, headers=headers)
             if upstream.status >= 400:
-                return await _error_response(upstream)
+                return await _error_response(upstream, slug=route.slug)
             if body.get("stream"):
-                return await self._stream_anthropic(request, upstream, route, as_responses, namespace_call_map)
+                return await self._stream_anthropic(request, upstream, route, as_responses, namespace_call_map, tool_types)
             payload = await upstream.json(content_type=None)
         if as_responses:
-            return web.json_response(anthropic_to_response(payload, route.slug, namespace_call_map))
+            return web.json_response(anthropic_to_response(payload, route.slug, namespace_call_map, tool_types))
         return web.json_response(anthropic_to_chat_response(payload, route.slug))
 
     async def _stream_openai_chat(
@@ -816,11 +844,13 @@ class ShimServer:
         route: ShimModel,
         as_responses: bool,
         namespace_call_map: dict[str, tuple[str, str]] | None = None,
+        tool_types: dict[str, str] | None = None,
     ) -> web.StreamResponse:
         response = _sse_response()
         await response.prepare(request)
         if as_responses:
-            state = ResponsesStreamState(route.slug, namespace_call_map)
+            state = ResponsesStreamState(route.slug, namespace_call_map, tool_types)
+        terminated = False
         try:
             if as_responses:
                 await state.start(response)
@@ -831,11 +861,21 @@ class ShimServer:
                     event = json.loads(line)
                 except json.JSONDecodeError:
                     continue
+                if isinstance(event, dict) and event.get("error"):
+                    if as_responses:
+                        await state.fail(response, event.get("error"))
+                    else:
+                        await _write_sse(response, event)
+                        await _safe_write(response, b"data: [DONE]\n\n")
+                    terminated = True
+                    break
                 if as_responses:
                     await state.write_chat_delta(response, event)
                 else:
                     await _write_sse(response, event)
-            if as_responses:
+            if terminated:
+                pass
+            elif as_responses:
                 await state.finish(response)
             else:
                 await _safe_write(response, b"data: [DONE]\n\n")
@@ -856,11 +896,13 @@ class ShimServer:
         route: ShimModel,
         as_responses: bool,
         namespace_call_map: dict[str, tuple[str, str]] | None = None,
+        tool_types: dict[str, str] | None = None,
     ) -> web.StreamResponse:
         response = _sse_response()
         await response.prepare(request)
         if as_responses:
-            state = ResponsesStreamState(route.slug, namespace_call_map)
+            state = ResponsesStreamState(route.slug, namespace_call_map, tool_types)
+        terminated = False
         try:
             if as_responses:
                 await state.start(response)
@@ -871,11 +913,21 @@ class ShimServer:
                     event = json.loads(line)
                 except json.JSONDecodeError:
                     continue
+                if isinstance(event, dict) and event.get("type") == "error":
+                    if as_responses:
+                        await state.fail(response, event.get("error") or event)
+                    else:
+                        await _write_sse(response, _anthropic_stream_to_chat_chunk(event, route.slug))
+                        await _safe_write(response, b"data: [DONE]\n\n")
+                    terminated = True
+                    break
                 if as_responses:
                     await state.write_anthropic_delta(response, event)
                 else:
                     await _write_sse(response, _anthropic_stream_to_chat_chunk(event, route.slug))
-            if as_responses:
+            if terminated:
+                pass
+            elif as_responses:
                 await state.finish(response)
             else:
                 await _safe_write(response, b"data: [DONE]\n\n")
@@ -1034,11 +1086,17 @@ class ResponsesStreamState:
     proper .added / .delta / .done / .completed events plus a final
     `response.completed` with the full reconciled `output` array."""
 
-    def __init__(self, model: str, namespace_call_map: dict[str, tuple[str, str]] | None = None):
+    def __init__(
+        self,
+        model: str,
+        namespace_call_map: dict[str, tuple[str, str]] | None = None,
+        tool_types: dict[str, str] | None = None,
+    ):
         self.response_id = f"resp_{int(time.time() * 1000)}"
         self.message_item_id = f"msg_{int(time.time() * 1000)}"
         self.model = model
         self.namespace_call_map = namespace_call_map or {}
+        self.tool_types = tool_types or {}
         self.message_index: int | None = None  # output_index for the assistant message
         self.message_text = ""
         self.message_opened = False
@@ -1075,6 +1133,19 @@ class ResponsesStreamState:
             if not state.get("closed"):
                 await self._close_tool(response, state)
         await _write_sse(response, {"type": "response.completed", "response": self._response("completed", final=True)})
+        await response.write(b"data: [DONE]\n\n")
+
+    async def fail(self, response: web.StreamResponse, error: Any) -> None:
+        message = ""
+        code = None
+        if isinstance(error, dict):
+            message = str(error.get("message") or error.get("error") or error)
+            code = error.get("code") or error.get("type")
+        else:
+            message = str(error or "upstream stream error")
+        payload = self._response("failed", final=True)
+        payload["error"] = {"message": message, "code": code}
+        await _write_sse(response, {"type": "response.failed", "response": payload})
         await response.write(b"data: [DONE]\n\n")
 
     # ------------------------------------------------------------------
@@ -1127,6 +1198,7 @@ class ResponsesStreamState:
             if fn.get("name"):
                 state["name"] += fn["name"]
                 state["name_fields"] = response_function_call_name_fields(state["name"], self.namespace_call_map)
+                state["type"] = response_tool_item_type(state["name"], self.tool_types)
         arg_delta = fn.get("arguments") or ""
         if arg_delta:
             state["arguments"] += arg_delta
@@ -1335,6 +1407,7 @@ class ResponsesStreamState:
             "id": call_id,
             "call_id": call_id,
             "name": name,
+            "type": response_tool_item_type(name, self.tool_types),
             "name_fields": response_function_call_name_fields(name, self.namespace_call_map),
             "arguments": "",
             "output_index": output_index,
@@ -1348,7 +1421,7 @@ class ResponsesStreamState:
                 "output_index": output_index,
                 "item": {
                     "id": call_id,
-                    "type": "function_call",
+                    "type": state["type"],
                     "status": "in_progress",
                     "call_id": call_id,
                     **state["name_fields"],
@@ -1360,6 +1433,8 @@ class ResponsesStreamState:
 
     async def _close_tool(self, response: web.StreamResponse, state: dict[str, Any]) -> None:
         state["closed"] = True
+        state["name_fields"] = response_function_call_name_fields(state.get("name", ""), self.namespace_call_map)
+        state["type"] = response_tool_item_type(state.get("name", ""), self.tool_types)
         await _write_sse(
             response,
             {
@@ -1493,7 +1568,7 @@ class ResponsesStreamState:
     def _tool_item(self, state: dict[str, Any], status: str) -> dict[str, Any]:
         return {
             "id": state["id"],
-            "type": "function_call",
+            "type": state.get("type") or "function_call",
             "status": status,
             "call_id": state["call_id"],
             **state["name_fields"],
@@ -1666,6 +1741,38 @@ def _log_incoming_request(endpoint: str, body: dict[str, Any]) -> None:
         )
     except Exception as exc:
         print(f"[req] failed to log: {exc}", flush=True)
+
+
+def _build_tool_types(body: dict[str, Any]) -> dict[str, str]:
+    return responses_tool_type_map(body.get("tools"))
+
+
+def _dump_incoming_request(endpoint: str, body: dict[str, Any]) -> None:
+    """Best-effort dump of the last incoming Responses body before translation."""
+    try:
+        dump_path = DEBUG_DIR / "last_incoming_request.json"
+        dump_path.parent.mkdir(parents=True, exist_ok=True)
+        payload = {"endpoint": endpoint, "body": body}
+        full = json.dumps(payload, indent=2, default=str)
+        if len(full) > 2_000_000:
+            tools = body.get("tools") or []
+            inputs = body.get("input") or []
+            payload = {
+                "endpoint": endpoint,
+                "_truncated": True,
+                "_full_size": len(full),
+                "model": body.get("model"),
+                "stream": body.get("stream"),
+                "tool_count": len(tools) if isinstance(tools, list) else 0,
+                "tools": tools[:120] if isinstance(tools, list) else [],
+                "input_count": len(inputs) if isinstance(inputs, list) else 0,
+                "last_6_input": inputs[-6:] if isinstance(inputs, list) else inputs,
+            }
+            dump_path.write_text(json.dumps(payload, indent=2, default=str))
+        else:
+            dump_path.write_text(full)
+    except OSError as exc:
+        print(f"[debug] incoming dump failed: {exc}", flush=True)
 
 
 async def _sse_lines(upstream) -> Any:

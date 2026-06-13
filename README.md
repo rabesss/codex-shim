@@ -57,6 +57,9 @@ and Codex-specific capability metadata.
 - Image and visual tool-result translation.
 - Namespace-tool flattening for upstream providers and namespace restoration
   on returned calls, required by Desktop Browser tools.
+- Native Responses tool item mapping for returned calls. `apply_patch` returns
+  as `custom_tool_call`, web-search calls return as `web_search_call`, and MCP
+  calls preserve their Desktop namespace/name identity.
 - Credential lookup through environment variables, files, and systemd
   credentials without serializing secret values into model catalogs.
 - Linux profile/wrapper commands that keep the normal Codex configuration
@@ -82,6 +85,9 @@ codex-shim status
 
 Without a discovery credential, `desktop write-models` uses a built-in model
 snapshot. Regenerate after provider changes so catalog rows do not become stale.
+Generated runtime state lives in `${XDG_STATE_HOME:-~/.local/state}/codex-shim`
+by default. Set `CODEX_SHIM_RUNTIME_DIR` only when you intentionally want an
+alternate local state directory.
 
 `codex-shim enable` writes a separate opt-in profile and wrapper. It does not
 need to change the top-level provider used by normal Codex. For the integrated
@@ -95,11 +101,18 @@ The shim therefore:
 
 1. flattens namespace plus child name into a callable upstream name;
 2. applies the same mapping to function-call history;
-3. restores the original `namespace` and child `name` in returned Responses
-   calls.
+3. preserves the original native tool type separately;
+4. restores the original `namespace`, child `name`, and Responses output item
+   type in returned calls.
 
 This translation preserves dispatch identity; it does not make a provider that
 lacks tool calling capable of using tools.
+
+`web_search` and `computer_use` are native/server-side Codex tools. The shim no
+longer advertises them to BYOK providers as ordinary fake functions, because
+neither the shim nor Desktop can execute such function-call fallbacks. Use a
+first-party model for native hosted web search, or expose a real MCP/function
+tool with an executor.
 
 ## Security Boundary
 
@@ -122,6 +135,12 @@ lacks tool calling capable of using tools.
   `/goal`; rebuild the companion repo from current `main`.
 - Older shim builds did not preserve namespace tool identity; update this repo
   if Browser tools return `unsupported call` despite being visible in Desktop.
+- Older shim builds also returned every tool as a generic `function_call`;
+  update if `apply_patch`, web search, or MCP connector calls fail even though
+  the selected provider emitted the expected tool name.
+- Stale `provider: commandcode` rows are normalized to the local CLIProxyAPI
+  OpenAI-compatible route. Regenerate `models.json` after provider changes so
+  capability metadata, especially `supports_tools`, stays accurate.
 - CLIProxyAPI discovery falls back to a static snapshot when unavailable. That
   keeps setup deterministic but may show routes that need regeneration.
 - Browser extension constraints such as invisible `target="_blank"` tabs,

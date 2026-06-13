@@ -39,8 +39,18 @@ from .settings import (
 from .desktop_models import write_desktop_models
 
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-RUNTIME_DIR = PROJECT_ROOT / ".codex-shim"
+def _default_project_root() -> Path:
+    return Path(__file__).resolve().parents[1]
+
+
+def _default_runtime_dir() -> Path:
+    if xdg_state_home := os.environ.get("XDG_STATE_HOME"):
+        return Path(xdg_state_home).expanduser() / "codex-shim"
+    return Path.home() / ".local" / "state" / "codex-shim"
+
+
+PROJECT_ROOT = Path(os.environ.get("CODEX_SHIM_PROJECT_ROOT") or _default_project_root()).expanduser()
+RUNTIME_DIR = Path(os.environ.get("CODEX_SHIM_RUNTIME_DIR") or _default_runtime_dir()).expanduser()
 CATALOG_PATH = RUNTIME_DIR / "custom_model_catalog.json"
 CONFIG_PATH = RUNTIME_DIR / "config.toml"
 PID_PATH = RUNTIME_DIR / "shim.pid"
@@ -314,6 +324,7 @@ def start(settings_path: Path, port: int) -> int:
         str(port),
     ]
     env = os.environ.copy()
+    env["CODEX_SHIM_RUNTIME_DIR"] = str(RUNTIME_DIR)
     env["PYTHONPATH"] = str(PROJECT_ROOT) + os.pathsep + env.get("PYTHONPATH", "")
     process = _popen_daemon(cmd, log, env)
     PID_PATH.write_text(str(process.pid))
@@ -872,7 +883,7 @@ def _remove_section(text: str, section: str) -> str:
 
 
 def _popen_daemon(cmd: list[str], log, env: dict[str, str]) -> subprocess.Popen:
-    kwargs = {"cwd": str(PROJECT_ROOT), "env": env, "stdout": log, "stderr": log}
+    kwargs = {"cwd": str(RUNTIME_DIR), "env": env, "stdout": log, "stderr": log}
     return subprocess.Popen(cmd, start_new_session=True, **kwargs)
 
 

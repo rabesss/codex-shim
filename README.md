@@ -89,6 +89,36 @@ Generated runtime state lives in `${XDG_STATE_HOME:-~/.local/state}/codex-shim`
 by default. Set `CODEX_SHIM_RUNTIME_DIR` only when you intentionally want an
 alternate local state directory.
 
+### Context Windows And Compaction
+
+Codex Desktop reads context-window and compaction thresholds from the shim's
+catalog response. When `desktop write-models` can reach CLIProxyAPI, the shim
+preserves model metadata such as `contextWindow`, `maxTokens`,
+`autoCompactTokenLimit`, `truncationLimit`, tool support, image support, and
+reasoning support. Those live fields take precedence over built-in fallbacks.
+
+For discovered rows that do not report limits, this fork keeps curated
+fallbacks for known coding-plan aliases. Current GLM 5.2 and MiniMax M3 aliases
+are treated as 1,000,000-token context models with 131,072 output tokens, so
+Desktop no longer falls back to the generic 128k display.
+
+The default generated thresholds are:
+
+- `auto_compact_token_limit`: 82% of the context window.
+- `truncation_limit`: 22% of the context window, capped at 128,000 tokens.
+
+Set these before regenerating `models.json` if you want a different policy:
+
+```bash
+CODEX_SHIM_AUTO_COMPACT_RATIO=0.9 \
+CODEX_SHIM_TRUNCATION_RATIO=0.1 \
+codex-shim desktop write-models --output ~/.codex-shim/models.json
+```
+
+Values are ratios from `0` to `1`; invalid values fall back to the defaults.
+Explicit `autoCompactTokenLimit` or `truncationLimit` metadata from
+CLIProxyAPI still wins over the ratio.
+
 `codex-shim enable` writes a separate opt-in profile and wrapper. It does not
 need to change the top-level provider used by normal Codex. For the integrated
 Desktop picker, follow [`docs/linux-desktop.md`](docs/linux-desktop.md).
@@ -141,6 +171,9 @@ tool with an executor.
 - Stale `provider: commandcode` rows are normalized to the local CLIProxyAPI
   OpenAI-compatible route. Regenerate `models.json` after provider changes so
   capability metadata, especially `supports_tools`, stays accurate.
+- Context windows and compaction timing are generated into `models.json`.
+  Regenerate after changing CLIProxyAPI metadata or
+  `CODEX_SHIM_AUTO_COMPACT_RATIO` / `CODEX_SHIM_TRUNCATION_RATIO`.
 - CLIProxyAPI discovery falls back to a static snapshot when unavailable. That
   keeps setup deterministic but may show routes that need regeneration.
 - Browser extension constraints such as invisible `target="_blank"` tabs,

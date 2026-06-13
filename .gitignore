@@ -21,6 +21,7 @@ venv/
 build/
 dist/
 *.egg-info/
+uv.lock
 
 # Editor / OS
 .DS_Store

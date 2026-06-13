@@ -86,6 +86,13 @@ Current platform support and integration ownership are defined by the README.
 - The supported Desktop path is now the package/build integration in
   `codex-desktop-control`; shim `patch-app` and `restore-app` are documented as
   legacy overlay compatibility commands.
+- CLIProxyAPI discovery now preserves live model metadata instead of reducing
+  rows to `id` and `owned_by`. Context windows, output limits, compact
+  thresholds, truncation limits, image support, reasoning support, and tool
+  support can now flow into Desktop catalog rows.
+- Desktop model generation now exposes compaction controls through
+  `CODEX_SHIM_AUTO_COMPACT_RATIO` and `CODEX_SHIM_TRUNCATION_RATIO`; explicit
+  CLIProxyAPI metadata still wins.
 - Removed the unimplemented Rust adapter design from the public repository so
   documentation describes shipped behavior only.
 
@@ -119,6 +126,9 @@ Current platform support and integration ownership are defined by the README.
 - Image-generation intent only routes to ChatGPT passthrough when that
   passthrough is explicitly enabled and authenticated; otherwise BYOK routing
   continues normally.
+- GLM 5.2 and MiniMax M3 coding-plan aliases now use current long-context
+  fallback metadata instead of the generic 128k Desktop catalog default when
+  CLIProxyAPI does not publish limits.
 - CLI runtime files now default to
   `${XDG_STATE_HOME:-~/.local/state}/codex-shim`, and the daemon starts from
   that state directory. This keeps non-editable installs and systemd services

@@ -91,10 +91,11 @@ BOOTSTRAP_MODELS: tuple[tuple[str, str], ...] = (
 )
 
 CAPABILITY_OVERRIDES: dict[tuple[str, str], dict[str, Any]] = {
+    ("zai-coding", "glm-5.2"): {"context": 1_000_000, "output": 131_072, "reasoning": True},
     ("zai-coding", "glm-5.1"): {"context": 200_000, "output": 131_072},
     ("zai-coding", "glm-5"): {"context": 202_752, "output": 131_072},
     ("zai-coding", "glm-4.7"): {"context": 204_800, "output": 131_072},
-    ("minimax-coding", "MiniMax-M3"): {"context": 512_000, "output": 131_072, "image": True},
+    ("minimax-coding", "MiniMax-M3"): {"context": 1_000_000, "output": 131_072, "image": True},
     ("minimax-coding", "MiniMax-M2.7"): {"context": 204_800, "output": 131_072},
     ("minimax-coding", "MiniMax-M2.7-highspeed"): {"context": 204_800, "output": 131_072},
     ("opencode-go", "deepseek-v4-pro"): {"context": 1_000_000, "output": 384_000},
@@ -121,6 +122,15 @@ CAPABILITY_OVERRIDES: dict[tuple[str, str], dict[str, Any]] = {
         "reasoning": True,
     },
     ("xai", "grok-4.20-0309-non-reasoning"): {"context": 2_000_000, "output": 30_000, "image": True},
+    ("cursor-zai-coding", "zai-coding/glm-5.2"): {"context": 1_000_000, "output": 131_072, "reasoning": True},
+    ("cursor-zai-coding", "glm-5.2"): {"context": 1_000_000, "output": 131_072, "reasoning": True},
+    ("cursor-minimax-coding", "minimax-coding/MiniMax-M3"): {
+        "context": 1_000_000,
+        "output": 131_072,
+        "image": True,
+    },
+    ("cursor-minimax-coding", "MiniMax-M3"): {"context": 1_000_000, "output": 131_072, "image": True},
+    ("commandcode", "MiniMaxAI/MiniMax-M3"): {"context": 1_000_000, "output": 131_072, "image": True},
 }
 
 
@@ -169,7 +179,7 @@ def discover_cliproxyapi_models(
     api_key: str | None = None,
     timeout: float = DISCOVERY_TIMEOUT_SECONDS,
 ) -> list[dict[str, Any]]:
-    api_key = (api_key if api_key is not None else os.environ.get(CLIPROXYAPI_CREDENTIAL, "")).strip()
+    api_key = _cliproxyapi_discovery_api_key(api_key)
     if not api_key:
         return []
     url = base_url.rstrip("/") + "/models"
@@ -195,8 +205,26 @@ def discover_cliproxyapi_models(
         model_id = str(item.get("id") or "").strip()
         if not model_id:
             continue
-        rows.append({"id": model_id, "owned_by": str(item.get("owned_by") or "cliproxyapi").strip()})
+        preserved = dict(item)
+        preserved["id"] = model_id
+        preserved["owned_by"] = str(item.get("owned_by") or "cliproxyapi").strip()
+        rows.append(preserved)
     return rows
+
+
+def _cliproxyapi_discovery_api_key(explicit: str | None = None) -> str:
+    if explicit is not None:
+        return explicit.strip()
+    env_value = os.environ.get(CLIPROXYAPI_CREDENTIAL, "").strip()
+    if env_value:
+        return env_value
+    credentials_dir = os.environ.get("CREDENTIALS_DIRECTORY", "").strip()
+    if not credentials_dir:
+        return ""
+    try:
+        return (Path(credentials_dir) / CLIPROXYAPI_CREDENTIAL).read_text().strip()
+    except OSError:
+        return ""
 
 
 def _cliproxyapi_rows(
@@ -255,8 +283,20 @@ def _row_from_cliproxyapi(*, owner: str, model_id: str, index: int, raw: dict[st
         "api_key_credential": CLIPROXYAPI_CREDENTIAL,
         "max_context_limit": caps["context"],
         "max_output_tokens": caps["output"],
-        "auto_compact_token_limit": max(8_000, int(caps["context"] * 0.82)),
-        "truncation_limit": min(128_000, max(16_000, int(caps["context"] * 0.22))),
+        "auto_compact_token_limit": caps["compact"] or _ratio_limit(
+            caps["context"],
+            env_name="CODEX_SHIM_AUTO_COMPACT_RATIO",
+            default_ratio=0.82,
+            minimum=8_000,
+            maximum=None,
+        ),
+        "truncation_limit": caps["truncation"] or _ratio_limit(
+            caps["context"],
+            env_name="CODEX_SHIM_TRUNCATION_RATIO",
+            default_ratio=0.22,
+            minimum=16_000,
+            maximum=128_000,
+        ),
         "no_image_support": not caps["image"],
         "supports_tools": caps["tools"],
         "supports_reasoning": caps["reasoning"],
@@ -274,36 +314,138 @@ def _capabilities(owner: str, model_id: str, raw: dict[str, Any] | None = None) 
         "tools": owner in TOOL_CAPABLE_OWNERS,
         "reasoning": False,
         "streaming": True,
+        "compact": None,
+        "truncation": None,
     }
     if owner == "xai":
         caps.update({"context": 200_000, "output": 30_000, "image": model_id.startswith("grok-4")})
+    caps.update(CAPABILITY_OVERRIDES.get((owner, model_id), {}))
     if raw is not None:
+        raw_context = _raw_int(
+            raw,
+            "max_context_limit",
+            "maxContextLimit",
+            "context_window",
+            "contextWindow",
+            "max_context_window",
+            "maxContextWindow",
+            "context_length",
+            "contextLength",
+            "context_size",
+            "contextSize",
+            "max_input_tokens",
+            "maxInputTokens",
+        )
+        if raw_context is not None:
+            caps["context"] = raw_context
+        raw_output = _raw_int(
+            raw,
+            "max_output_tokens",
+            "maxOutputTokens",
+            "max_tokens",
+            "maxTokens",
+            "output_tokens",
+            "outputTokens",
+        )
+        if raw_output is not None:
+            caps["output"] = raw_output
+        raw_compact = _raw_int(raw, "auto_compact_token_limit", "autoCompactTokenLimit", "compact_tokens", "compactTokens")
+        if raw_compact is not None:
+            caps["compact"] = raw_compact
+        raw_truncation = _raw_int(raw, "truncation_limit", "truncationLimit", "truncation_tokens", "truncationTokens")
+        if raw_truncation is not None:
+            caps["truncation"] = raw_truncation
         raw_tools = _raw_bool(raw, "supports_tools", "supportsTools", "tool_calls", "toolCalls")
         if raw_tools is not None:
             caps["tools"] = raw_tools
         raw_streaming = _raw_bool(raw, "supports_streaming", "supportsStreaming")
         if raw_streaming is not None:
             caps["streaming"] = raw_streaming
-    caps.update(CAPABILITY_OVERRIDES.get((owner, model_id), {}))
+        raw_image = _raw_bool(raw, "supports_image_inputs", "supportsImageInputs", "supports_images", "supportsImages", "image", "vision", "multimodal")
+        if raw_image is not None:
+            caps["image"] = raw_image
+        raw_no_image = _raw_bool(raw, "no_image_support", "noImageSupport")
+        if raw_no_image is not None:
+            caps["image"] = not raw_no_image
+        raw_reasoning = _raw_bool(raw, "supports_reasoning", "supportsReasoning", "reasoning")
+        if raw_reasoning is not None:
+            caps["reasoning"] = raw_reasoning
     return caps
 
 
 def _raw_bool(row: dict[str, Any], *keys: str) -> bool | None:
-    for key in keys:
-        if key not in row:
-            continue
-        value = row[key]
-        if isinstance(value, bool):
-            return value
-        if isinstance(value, str):
-            lowered = value.strip().lower()
-            if lowered in {"1", "true", "yes", "on"}:
-                return True
-            if lowered in {"0", "false", "no", "off"}:
-                return False
-        if isinstance(value, (int, float)):
-            return bool(value)
+    for source in _raw_sources(row):
+        for key in keys:
+            if key not in source:
+                continue
+            value = source[key]
+            if isinstance(value, bool):
+                return value
+            if isinstance(value, str):
+                lowered = value.strip().lower()
+                if lowered in {"1", "true", "yes", "on"}:
+                    return True
+                if lowered in {"0", "false", "no", "off"}:
+                    return False
+            if isinstance(value, (int, float)):
+                return bool(value)
     return None
+
+
+def _raw_int(row: dict[str, Any], *keys: str) -> int | None:
+    for source in _raw_sources(row):
+        for key in keys:
+            if key not in source:
+                continue
+            value = source[key]
+            if isinstance(value, bool):
+                continue
+            if isinstance(value, int):
+                return value if value > 0 else None
+            if isinstance(value, float):
+                return int(value) if value > 0 else None
+            if isinstance(value, str):
+                normalized = value.strip().replace(",", "").replace("_", "")
+                if normalized.isdigit():
+                    parsed = int(normalized)
+                    return parsed if parsed > 0 else None
+    return None
+
+
+def _raw_sources(row: dict[str, Any]) -> Iterable[dict[str, Any]]:
+    yield row
+    for key in ("metadata", "capabilities", "limits"):
+        value = row.get(key)
+        if isinstance(value, dict):
+            yield value
+
+
+def _ratio_limit(
+    context: int,
+    *,
+    env_name: str,
+    default_ratio: float,
+    minimum: int,
+    maximum: int | None,
+) -> int:
+    ratio = _env_ratio(env_name, default_ratio)
+    value = max(minimum, int(context * ratio))
+    if maximum is not None:
+        value = min(maximum, value)
+    return value
+
+
+def _env_ratio(name: str, default: float) -> float:
+    raw = os.environ.get(name, "").strip()
+    if not raw:
+        return default
+    try:
+        value = float(raw)
+    except ValueError:
+        return default
+    if value <= 0:
+        return default
+    return min(value, 1.0)
 
 
 def _route_slug(owner: str, model_id: str) -> str:

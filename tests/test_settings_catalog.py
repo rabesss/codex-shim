@@ -7,7 +7,7 @@ import pytest
 
 from codex_shim import cli
 from codex_shim.catalog import catalog_entry, write_catalog
-from codex_shim.desktop_models import desktop_models_payload, write_desktop_models
+from codex_shim.desktop_models import desktop_models_payload, discover_cliproxyapi_models, write_desktop_models
 from codex_shim.settings import ModelSettings, chatgpt_passthrough_available, FALLBACK_CHATGPT_PASSTHROUGH_SLUGS
 
 
@@ -196,6 +196,17 @@ def test_desktop_model_matrix_can_use_live_cliproxyapi_discovery():
     payload = desktop_models_payload(
         cliproxyapi_models=[
             {"id": "deepseek/deepseek-v4-flash", "owned_by": "commandcode"},
+            {
+                "id": "example/custom-long",
+                "owned_by": "example-provider",
+                "contextWindow": 777000,
+                "maxTokens": 65536,
+                "autoCompactTokenLimit": 710000,
+                "truncationLimit": 123456,
+                "supportsTools": True,
+                "supportsImageInputs": True,
+                "supportsReasoning": True,
+            },
             {"id": "grok-4.3", "owned_by": "xai"},
             {"id": "grok-imagine-image", "owned_by": "xai"},
             {"id": "commandcode/deepseek/deepseek-v4-pro", "owned_by": "cursor-commandcode"},
@@ -203,10 +214,86 @@ def test_desktop_model_matrix_can_use_live_cliproxyapi_discovery():
     )
     rows = {row["slug"]: row for row in payload["models"]}
 
-    assert set(rows) == {"commandcode-deepseek-v4-flash", "grok-4-3"}
+    assert set(rows) == {"commandcode-deepseek-v4-flash", "example-provider-custom-long", "grok-4-3"}
     assert rows["commandcode-deepseek-v4-flash"]["model"] == "deepseek/deepseek-v4-flash"
     assert rows["commandcode-deepseek-v4-flash"]["provider_display_name"] == "CLIProxyAPI / CommandCode"
+    assert rows["example-provider-custom-long"]["max_context_limit"] == 777000
+    assert rows["example-provider-custom-long"]["max_output_tokens"] == 65536
+    assert rows["example-provider-custom-long"]["auto_compact_token_limit"] == 710000
+    assert rows["example-provider-custom-long"]["truncation_limit"] == 123456
+    assert rows["example-provider-custom-long"]["supports_tools"] is True
+    assert rows["example-provider-custom-long"]["no_image_support"] is False
+    assert rows["example-provider-custom-long"]["supports_reasoning"] is True
     assert rows["grok-4-3"]["no_image_support"] is False
+
+
+def test_live_cliproxyapi_discovery_reads_systemd_credential(monkeypatch, tmp_path):
+    credential_dir = tmp_path / "credentials"
+    credential_dir.mkdir()
+    (credential_dir / "CLIPROXY_INTERNAL_API_KEY").write_text("from-credential\n")
+    monkeypatch.delenv("CLIPROXY_INTERNAL_API_KEY", raising=False)
+    monkeypatch.setenv("CREDENTIALS_DIRECTORY", str(credential_dir))
+
+    captured: dict[str, str | None] = {}
+
+    class Response:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def read(self):
+            return json.dumps({"data": [{"id": "zai-coding/glm-5.2", "owned_by": "cursor-zai-coding"}]}).encode()
+
+    def fake_urlopen(req, *, timeout):
+        captured["authorization"] = req.get_header("Authorization")
+        captured["timeout"] = str(timeout)
+        return Response()
+
+    monkeypatch.setattr("codex_shim.desktop_models.request.urlopen", fake_urlopen)
+
+    rows = discover_cliproxyapi_models(base_url="http://127.0.0.1:8317/v1", timeout=0.5)
+
+    assert rows == [{"id": "zai-coding/glm-5.2", "owned_by": "cursor-zai-coding"}]
+    assert captured == {"authorization": "Bearer from-credential", "timeout": "0.5"}
+
+
+def test_desktop_model_matrix_uses_current_long_context_fallbacks():
+    payload = desktop_models_payload(
+        cliproxyapi_models=[
+            {"id": "zai-coding/glm-5.2", "owned_by": "cursor-zai-coding"},
+            {"id": "glm-5.2", "owned_by": "cursor-zai-coding"},
+            {"id": "minimax-coding/MiniMax-M3", "owned_by": "cursor-minimax-coding"},
+            {"id": "MiniMaxAI/MiniMax-M3", "owned_by": "commandcode"},
+        ]
+    )
+    rows = {row["slug"]: row for row in payload["models"]}
+
+    assert rows["cursor-zai-coding-glm-5-2"]["max_context_limit"] == 1000000
+    assert rows["cursor-zai-coding-glm-5-2"]["max_output_tokens"] == 131072
+    assert rows["cursor-zai-coding-glm-5-2"]["auto_compact_token_limit"] == 820000
+    assert rows["cursor-zai-coding-glm-5-2-1"]["max_context_limit"] == 1000000
+    assert rows["cursor-minimax-coding-minimax-m3"]["max_context_limit"] == 1000000
+    assert rows["cursor-minimax-coding-minimax-m3"]["no_image_support"] is False
+    assert rows["commandcode-minimax-m3"]["max_context_limit"] == 1000000
+    assert rows["commandcode-minimax-m3"]["max_output_tokens"] == 131072
+
+
+def test_desktop_model_matrix_allows_compaction_ratio_override(monkeypatch):
+    monkeypatch.setenv("CODEX_SHIM_AUTO_COMPACT_RATIO", "0.9")
+    monkeypatch.setenv("CODEX_SHIM_TRUNCATION_RATIO", "0.1")
+
+    payload = desktop_models_payload(
+        cliproxyapi_models=[
+            {"id": "zai-coding/glm-5.2", "owned_by": "cursor-zai-coding"},
+        ]
+    )
+    [row] = payload["models"]
+
+    assert row["max_context_limit"] == 1000000
+    assert row["auto_compact_token_limit"] == 900000
+    assert row["truncation_limit"] == 100000
 
 
 def test_desktop_model_matrix_keeps_xiaomi_mimo_token_plan_text_only():

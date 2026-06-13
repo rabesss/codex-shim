@@ -62,6 +62,25 @@ The command writes credential names and route metadata, not secret values. If
 the discovery credential is absent or CLIProxyAPI cannot be reached, it writes
 the built-in bootstrap matrix instead. Regenerate after provider changes.
 
+The same generated file controls the context footer and compaction timing in
+Desktop. Live CLIProxyAPI fields such as `contextWindow`, `maxTokens`,
+`autoCompactTokenLimit`, `truncationLimit`, `supportsTools`,
+`supportsImageInputs`, and `supportsReasoning` are preserved when present. If a
+route does not publish limits, the shim uses curated fallbacks for known
+coding-plan aliases, including GLM 5.2 and MiniMax M3 long-context rows.
+
+Default generated compaction starts at 82% of the model context window, while
+history truncation is 22% capped at 128,000 tokens. To change those thresholds,
+set ratios before regenerating:
+
+```bash
+CODEX_SHIM_AUTO_COMPACT_RATIO=0.9 \
+CODEX_SHIM_TRUNCATION_RATIO=0.1 \
+codex-shim desktop write-models --output ~/.codex-shim/models.json
+```
+
+Explicit limits returned by CLIProxyAPI take precedence over these ratios.
+
 Start the service:
 
 ```bash
@@ -217,6 +236,8 @@ Then verify through the installed Desktop UI:
 |---|---|
 | Custom rows are absent | Verify `custom-model-catalog` was enabled and `/api/models` is reachable. |
 | Shim reports no usable models | Regenerate `models.json` with the discovery credential available and verify request-time credentials. |
+| Context footer shows the wrong model limit | Update codex-shim, rerun `desktop write-models` with the discovery credential available, restart the service, then inspect `/api/models` and the generated catalog for the new limits. |
+| Desktop compacts too early or too late | Regenerate `models.json` with `CODEX_SHIM_AUTO_COMPACT_RATIO` and restart the shim service. |
 | Custom thread fails only after restart | Restore the durable non-default `[model_providers.codex_shim]` block. |
 | `/goal` child no longer reaches the shim | Rebuild `codex-desktop-control` from current `main`; old fork payloads dropped provider state. |
 | Browser tool is visible but returns `unsupported call` | Update both repos, confirm the row has `supports_tools: true`, and inspect returned `type`, `namespace`, and `name` fields. |

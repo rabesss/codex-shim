@@ -208,3 +208,4 @@ python3 -m compileall -q codex_shim
 
 MIT. Codex Desktop is a product of OpenAI. This community project is not
 affiliated with OpenAI or the upstream `codex-shim` maintainer.
+<!-- pullfrog secret retest -->

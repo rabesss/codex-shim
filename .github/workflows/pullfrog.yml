@@ -30,5 +30,7 @@ jobs:
           persist-credentials: false
       - name: Run agent
         uses: pullfrog/pullfrog@65e7f69dde116437a0876102b06e67f3633d192d # v0
+        env:
+          ZAI_API_KEY: ${{ secrets.ZAI_API_KEY }}
         with:
           prompt: ${{ inputs.prompt }}

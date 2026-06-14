@@ -1,5 +1,7 @@
 # codex-shim
 
+<!-- pullfrog glm-5.2 retest probe -->
+
 `codex-shim` is a Linux-focused Codex Responses compatibility service for
 custom models. It exposes a loopback Codex-compatible API and model catalog,
 then translates requests to CLIProxyAPI-backed OpenAI-chat or

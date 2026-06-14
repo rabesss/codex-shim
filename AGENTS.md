@@ -39,7 +39,8 @@ behavior lives in the companion repo [`rabesss/codex-desktop-control`](https://g
 Pullfrog runs in GitHub Actions with BYOK via Z.AI GLM-5.2:
 
 - Workflow: [`.github/workflows/pullfrog.yml`](.github/workflows/pullfrog.yml)
-- Provider config: [`opencode.json`](opencode.json) (`zai/glm-5.2`)
-- Secrets: `ZAI_API_KEY` (GitHub Actions secret) and `PULLFROG_MODEL=zai/glm-5.2` (workflow `env`)
+- Provider config: [`opencode.json`](opencode.json) (`zai/glm-5.2` via the Z.AI **Coding Plan** endpoint)
+- GitHub Actions secret: `ZAI_API_KEY`
+- Workflow env (not a secret): `PULLFROG_MODEL=zai/glm-5.2`
 
 Pullfrog honors this file and [`REVIEW.md`](REVIEW.md). Dashboard triggers live in the Pullfrog console.

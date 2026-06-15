@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 
 from codex_shim import cli
+from codex_shim import settings as settings_module
 from codex_shim.catalog import catalog_entry, write_catalog
 from codex_shim.desktop_models import (
     desktop_models_payload,
@@ -786,6 +787,36 @@ def test_doctor_json_accepts_direct_official_routing_and_loopback_provider(monke
         "official-routing",
         "desktop-provider",
     }
+
+
+def test_doctor_json_keeps_missing_credential_warning_on_stderr(monkeypatch, tmp_path, capsys):
+    settings = tmp_path / "models.json"
+    settings.write_text(
+        json.dumps(
+            {
+                "models": [
+                    {
+                        "model": "glm-5.2",
+                        "display_name": "GLM 5.2",
+                        "provider": "generic-chat-completion-api",
+                        "base_url": "http://127.0.0.1:8317/v1",
+                        "credential": "CLIPROXY_INTERNAL_API_KEY",
+                    }
+                ]
+            }
+        )
+    )
+    config = tmp_path / "config.toml"
+    config.write_text('model_provider = "openai"\n')
+    monkeypatch.setattr(cli, "CODEX_CONFIG_PATH", config)
+    monkeypatch.setattr(cli, "_health", lambda _port: {"models": 1})
+    monkeypatch.delenv("CLIPROXY_INTERNAL_API_KEY", raising=False)
+    settings_module._MISSING_CREDENTIAL_WARNED.clear()
+
+    assert cli.doctor(settings, 8765, json_output=True) == 0
+    captured = capsys.readouterr()
+    assert json.loads(captured.out)["ready"] is True
+    assert "missing credential" in captured.err
 
 
 def test_doctor_rejects_global_shim_routing_and_invalid_overrides(monkeypatch, tmp_path, capsys):

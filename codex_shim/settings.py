@@ -5,6 +5,7 @@ import json
 import os
 from pathlib import Path
 import re
+import sys
 from typing import Any
 
 
@@ -404,7 +405,7 @@ def _warn_missing_credential(key: str, message: str) -> None:
     if key in _MISSING_CREDENTIAL_WARNED:
         return
     _MISSING_CREDENTIAL_WARNED.add(key)
-    print(f"[settings] missing credential: {message}", flush=True)
+    print(f"[settings] missing credential: {message}", file=sys.stderr, flush=True)
 
 
 def _int_or_none(value: Any) -> int | None:

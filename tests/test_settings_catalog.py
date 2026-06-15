@@ -7,7 +7,13 @@ import pytest
 
 from codex_shim import cli
 from codex_shim.catalog import catalog_entry, write_catalog
-from codex_shim.desktop_models import desktop_models_payload, discover_cliproxyapi_models, write_desktop_models
+from codex_shim.desktop_models import (
+    desktop_models_payload,
+    desktop_overrides_path,
+    discover_cliproxyapi_models,
+    update_desktop_compaction_override,
+    write_desktop_models,
+)
 from codex_shim.settings import ModelSettings, chatgpt_passthrough_available, FALLBACK_CHATGPT_PASSTHROUGH_SLUGS
 
 
@@ -272,7 +278,8 @@ def test_desktop_model_matrix_uses_current_long_context_fallbacks():
 
     assert rows["cursor-zai-coding-glm-5-2"]["max_context_limit"] == 1000000
     assert rows["cursor-zai-coding-glm-5-2"]["max_output_tokens"] == 131072
-    assert rows["cursor-zai-coding-glm-5-2"]["auto_compact_token_limit"] == 820000
+    assert rows["cursor-zai-coding-glm-5-2"]["auto_compact_token_limit"] == 820_000
+    assert rows["cursor-zai-coding-glm-5-2"]["truncation_limit"] == 128_000
     assert rows["cursor-zai-coding-glm-5-2-1"]["max_context_limit"] == 1000000
     assert rows["cursor-minimax-coding-minimax-m3"]["max_context_limit"] == 1000000
     assert rows["cursor-minimax-coding-minimax-m3"]["no_image_support"] is False
@@ -286,7 +293,7 @@ def test_desktop_model_matrix_allows_compaction_ratio_override(monkeypatch):
 
     payload = desktop_models_payload(
         cliproxyapi_models=[
-            {"id": "zai-coding/glm-5.2", "owned_by": "cursor-zai-coding"},
+            {"id": "MiniMax-M3", "owned_by": "minimax-coding"},
         ]
     )
     [row] = payload["models"]
@@ -294,6 +301,124 @@ def test_desktop_model_matrix_allows_compaction_ratio_override(monkeypatch):
     assert row["max_context_limit"] == 1000000
     assert row["auto_compact_token_limit"] == 900000
     assert row["truncation_limit"] == 100000
+
+
+def test_desktop_compaction_override_persists_across_catalog_regeneration(monkeypatch, tmp_path):
+    settings = tmp_path / "models.json"
+    discovered = [{"id": "zai-coding/glm-5.2", "owned_by": "cursor-zai-coding"}]
+    monkeypatch.setattr("codex_shim.desktop_models.discover_cliproxyapi_models", lambda: discovered)
+
+    write_desktop_models(settings)
+    changed = update_desktop_compaction_override(
+        settings,
+        "cursor-zai-coding-glm-5-2",
+        compact_limit=165_000,
+        truncation_limit=48_000,
+    )
+    write_desktop_models(settings)
+
+    assert changed == ["cursor-zai-coding-glm-5-2"]
+    [row] = json.loads(settings.read_text())["models"]
+    assert row["auto_compact_token_limit"] == 165_000
+    assert row["truncation_limit"] == 48_000
+    overrides = json.loads(desktop_overrides_path(settings).read_text())
+    assert overrides["models"]["cursor-zai-coding-glm-5-2"]["auto_compact_token_limit"] == 165_000
+
+
+def test_desktop_compaction_override_requires_all_for_duplicate_upstream_model_ids(tmp_path):
+    settings = tmp_path / "models.json"
+    settings.write_text(
+        json.dumps(
+            {
+                "models": [
+                    {
+                        "slug": "route-a-glm",
+                        "model": "vendor/glm-5.2",
+                        "display_name": "GLM 5.2",
+                        "auto_compact_token_limit": 820_000,
+                    },
+                    {
+                        "slug": "route-b-glm",
+                        "model": "glm-5.2",
+                        "display_name": "GLM 5.2",
+                        "auto_compact_token_limit": 820_000,
+                    },
+                ]
+            }
+        )
+    )
+
+    with pytest.raises(ValueError, match="matches multiple models"):
+        update_desktop_compaction_override(settings, "GLM 5.2", compact_limit=165_000)
+
+    changed = update_desktop_compaction_override(
+        settings,
+        "GLM 5.2",
+        compact_limit=165_000,
+        match_all=True,
+    )
+    assert changed == ["route-a-glm", "route-b-glm"]
+    assert {row["auto_compact_token_limit"] for row in json.loads(settings.read_text())["models"]} == {165_000}
+
+
+def test_desktop_compaction_override_clear_restores_generated_values(tmp_path):
+    settings = tmp_path / "models.json"
+    settings.write_text(
+        json.dumps(
+            {
+                "models": [
+                    {
+                        "slug": "route-glm",
+                        "model": "glm-5.2",
+                        "auto_compact_token_limit": 820_000,
+                        "truncation_limit": 128_000,
+                    }
+                ]
+            }
+        )
+    )
+    update_desktop_compaction_override(
+        settings,
+        "route-glm",
+        compact_limit=165_000,
+        truncation_limit=48_000,
+    )
+
+    update_desktop_compaction_override(settings, "route-glm", clear=True)
+
+    [row] = json.loads(settings.read_text())["models"]
+    assert row["auto_compact_token_limit"] == 820_000
+    assert row["truncation_limit"] == 128_000
+    assert json.loads(desktop_overrides_path(settings).read_text()) == {"models": {}}
+
+
+def test_desktop_compaction_override_rejects_invalid_threshold_order(tmp_path):
+    settings = tmp_path / "models.json"
+    settings.write_text(
+        json.dumps(
+            {
+                "models": [
+                    {
+                        "slug": "route-glm",
+                        "model": "glm-5.2",
+                        "max_context_limit": 1_000_000,
+                        "auto_compact_token_limit": 820_000,
+                        "truncation_limit": 128_000,
+                    }
+                ]
+            }
+        )
+    )
+
+    with pytest.raises(ValueError, match="exceeds context window"):
+        update_desktop_compaction_override(settings, "route-glm", compact_limit=1_100_000)
+    with pytest.raises(ValueError, match="exceeds compaction limit"):
+        update_desktop_compaction_override(
+            settings,
+            "route-glm",
+            compact_limit=165_000,
+            truncation_limit=200_000,
+        )
 
 
 def test_desktop_model_matrix_keeps_xiaomi_mimo_token_plan_text_only():
@@ -622,6 +747,79 @@ def test_linux_desktop_command_prefers_explicit_launcher(monkeypatch):
     monkeypatch.setenv("CODEX_DESKTOP_LINUX_LAUNCHER", "/custom/codex-desktop")
 
     assert cli._linux_codex_desktop_command("/work") == ["/custom/codex-desktop", "/work"]
+
+
+def test_doctor_json_accepts_direct_official_routing_and_loopback_provider(monkeypatch, tmp_path, capsys):
+    settings = tmp_path / "models.json"
+    settings.write_text(
+        json.dumps(
+            {
+                "models": [
+                    {
+                        "model": "glm-5.2",
+                        "display_name": "GLM 5.2",
+                        "provider": "generic-chat-completion-api",
+                        "base_url": "http://127.0.0.1:8317/v1",
+                    }
+                ]
+            }
+        )
+    )
+    config = tmp_path / "config.toml"
+    config.write_text(
+        'model_provider = "openai"\n\n'
+        '[model_providers.codex_shim]\n'
+        'base_url = "http://127.0.0.1:8765/v1"\n'
+        'wire_api = "responses"\n'
+    )
+    monkeypatch.setattr(cli, "CODEX_CONFIG_PATH", config)
+    monkeypatch.setattr(cli, "_health", lambda _port: {"models": 1})
+
+    assert cli.doctor(settings, 8765, json_output=True) == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["ready"] is True
+    assert payload["counts"] == {"fail": 0, "info": 1, "pass": 4}
+    assert {check["id"] for check in payload["checks"]} == {
+        "settings",
+        "compaction-overrides",
+        "health",
+        "official-routing",
+        "desktop-provider",
+    }
+
+
+def test_doctor_rejects_global_shim_routing_and_invalid_overrides(monkeypatch, tmp_path, capsys):
+    settings = tmp_path / "models.json"
+    settings.write_text(
+        json.dumps(
+            {
+                "models": [
+                    {
+                        "model": "glm-5.2",
+                        "display_name": "GLM 5.2",
+                        "provider": "generic-chat-completion-api",
+                        "base_url": "http://127.0.0.1:8317/v1",
+                    }
+                ]
+            }
+        )
+    )
+    desktop_overrides_path(settings).write_text("{not-json")
+    config = tmp_path / "config.toml"
+    config.write_text('model_provider = "codex_shim"\n')
+    monkeypatch.setattr(cli, "CODEX_CONFIG_PATH", config)
+    monkeypatch.setattr(cli, "_health", lambda _port: None)
+
+    assert cli.doctor(settings, 8765) == 1
+    output = capsys.readouterr().out
+    assert "[FAIL] compaction-overrides" in output
+    assert "[FAIL] health" in output
+    assert "[FAIL] official-routing" in output
+
+
+@pytest.mark.parametrize(("raw", "expected"), [("165k", 165000), ("1m", 1000000), ("48_000", 48000)])
+def test_token_count_accepts_human_readable_values(raw, expected):
+    assert cli._token_count(raw) == expected
 
 
 def test_desktop_bundle_patch_applies_model_picker_and_sidebar(tmp_path):

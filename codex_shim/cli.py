@@ -11,6 +11,7 @@ import time
 import hashlib
 import json
 import shutil
+import tomllib
 from urllib.request import urlopen
 
 from . import router as router_module
@@ -36,7 +37,12 @@ from .settings import (
     usable_byok_models,
     byok_model_has_credentials,
 )
-from .desktop_models import write_desktop_models
+from .desktop_models import (
+    desktop_overrides_path,
+    load_desktop_model_overrides,
+    update_desktop_compaction_override,
+    write_desktop_models,
+)
 
 
 def _default_project_root() -> Path:
@@ -116,6 +122,8 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("disable")
     sub.add_parser("restart")
     sub.add_parser("status")
+    doctor_parser = sub.add_parser("doctor", help="Check catalog, service, and first-party routing safety.")
+    doctor_parser.add_argument("--json", action="store_true", dest="json_output")
     sub.add_parser("patch-app", help="Patch Linux Codex Desktop picker/sidebar handling for custom shim models.")
     sub.add_parser("restore-app", help="Restore Linux Codex Desktop app.asar from the pre-patch backup.")
 
@@ -138,6 +146,20 @@ def main(argv: list[str] | None = None) -> int:
     desktop_write.add_argument("--output", type=Path, default=DEFAULT_SETTINGS)
     desktop_write.add_argument("--no-commandcode", action="store_true", help="Omit CLIProxyAPI CommandCode routes.")
     desktop_write.add_argument("--no-cpa-oauth", action="store_true", help="Omit CLIProxyAPI OAuth-only routes such as Grok CLI.")
+    compaction_parser = desktop_sub.add_parser(
+        "compaction",
+        help="Persist per-model Desktop compaction and truncation thresholds.",
+    )
+    compaction_sub = compaction_parser.add_subparsers(dest="compaction_command", required=True)
+    compaction_set = compaction_sub.add_parser("set", help="Set thresholds by model slug, upstream id, or display name.")
+    compaction_set.add_argument("selector")
+    compaction_set.add_argument("compact_limit", type=_token_count)
+    compaction_set.add_argument("--truncation", type=_token_count, dest="truncation_limit")
+    compaction_set.add_argument("--all", action="store_true", dest="match_all", help="Update every row matching an upstream id or display name.")
+    compaction_clear = compaction_sub.add_parser("clear", help="Remove persisted thresholds by slug, upstream id, or display name.")
+    compaction_clear.add_argument("selector")
+    compaction_clear.add_argument("--all", action="store_true", dest="match_all", help="Clear every row matching an upstream id or display name.")
+    compaction_sub.add_parser("list", help="List persisted per-model threshold overrides.")
 
     args = parser.parse_args(argv)
     if args.command == "generate":
@@ -162,6 +184,8 @@ def main(argv: list[str] | None = None) -> int:
         return start(args.settings, args.port)
     if args.command == "status":
         return status(args.port)
+    if args.command == "doctor":
+        return doctor(args.settings, args.port, json_output=args.json_output)
     if args.command == "patch-app":
         return patch_codex_app()
     if args.command == "restore-app":
@@ -194,7 +218,56 @@ def main(argv: list[str] | None = None) -> int:
         )
         print(f"Wrote desktop model matrix to {output}")
         return 0
+    if args.command == "desktop" and args.desktop_command == "compaction":
+        overrides_path = desktop_overrides_path(args.settings)
+        if args.compaction_command == "list":
+            overrides = load_desktop_model_overrides(overrides_path)
+            if not overrides:
+                print(f"No desktop compaction overrides in {overrides_path}.")
+                return 0
+            for slug, values in sorted(overrides.items()):
+                compact = values.get("auto_compact_token_limit", "default")
+                truncation = values.get("truncation_limit", "default")
+                print(f"{slug}: compact={compact} truncation={truncation}")
+            return 0
+        try:
+            changed = update_desktop_compaction_override(
+                args.settings,
+                args.selector,
+                compact_limit=getattr(args, "compact_limit", None),
+                truncation_limit=getattr(args, "truncation_limit", None),
+                clear=args.compaction_command == "clear",
+                match_all=args.match_all,
+                overrides_path=overrides_path,
+            )
+        except (FileNotFoundError, json.JSONDecodeError, ValueError) as exc:
+            print(f"Could not update desktop compaction policy: {exc}", file=sys.stderr)
+            return 2
+        action = "Cleared" if args.compaction_command == "clear" else "Updated"
+        print(f"{action} desktop compaction policy for: {', '.join(changed)}")
+        print(f"Settings:  {Path(args.settings).expanduser()}")
+        print(f"Overrides: {overrides_path}")
+        print("Restart codex-shim so Desktop receives the updated catalog.")
+        return 0
     return 2
+
+
+def _token_count(raw: str) -> int:
+    value = raw.strip().lower().replace("_", "").replace(",", "")
+    multiplier = 1
+    if value.endswith("k"):
+        multiplier = 1_000
+        value = value[:-1]
+    elif value.endswith("m"):
+        multiplier = 1_000_000
+        value = value[:-1]
+    try:
+        parsed = float(value) * multiplier
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(f"invalid token count: {raw}") from exc
+    if parsed <= 0 or not parsed.is_integer():
+        raise argparse.ArgumentTypeError(f"token count must be a positive whole number: {raw}")
+    return int(parsed)
 
 
 def _load_models(settings_path: Path):
@@ -394,6 +467,76 @@ def status(port: int) -> int:
         return 1
     print("Shim is stopped.")
     return 1
+
+
+def doctor(settings_path: Path, port: int, *, json_output: bool = False) -> int:
+    checks: list[dict[str, str]] = []
+
+    def record(check_id: str, status_value: str, detail: str) -> None:
+        checks.append({"id": check_id, "status": status_value, "detail": detail})
+
+    expanded_settings = Path(settings_path).expanduser()
+    try:
+        models = ModelSettings(expanded_settings).load()
+        if models:
+            record("settings", "pass", f"{expanded_settings} contains {len(models)} model rows")
+        else:
+            record("settings", "fail", f"{expanded_settings} contains no model rows")
+    except (FileNotFoundError, json.JSONDecodeError, ValueError) as exc:
+        record("settings", "fail", f"could not load {expanded_settings}: {exc}")
+
+    overrides_path = desktop_overrides_path(expanded_settings)
+    try:
+        overrides = load_desktop_model_overrides(overrides_path)
+        if overrides_path.exists():
+            record("compaction-overrides", "pass", f"{overrides_path} contains {len(overrides)} overrides")
+        else:
+            record("compaction-overrides", "info", f"no override file at {overrides_path}")
+    except (json.JSONDecodeError, ValueError) as exc:
+        record("compaction-overrides", "fail", f"could not load {overrides_path}: {exc}")
+
+    health = _health(port)
+    if health is None:
+        record("health", "fail", f"http://{DEFAULT_HOST}:{port}/health is unavailable")
+    else:
+        record("health", "pass", f"shim is healthy with {health.get('models', 'unknown')} models")
+
+    if CODEX_CONFIG_PATH.exists():
+        try:
+            config = tomllib.loads(CODEX_CONFIG_PATH.read_text())
+        except (OSError, tomllib.TOMLDecodeError) as exc:
+            record("official-routing", "fail", f"could not parse {CODEX_CONFIG_PATH}: {exc}")
+        else:
+            default_provider = config.get("model_provider")
+            if default_provider == PROVIDER_NAME:
+                record("official-routing", "fail", f"{CODEX_CONFIG_PATH} sets the global provider to {PROVIDER_NAME}")
+            else:
+                record("official-routing", "pass", f"global provider is {default_provider or 'unset'}, not {PROVIDER_NAME}")
+
+            providers = config.get("model_providers")
+            shim_provider = providers.get(PROVIDER_NAME) if isinstance(providers, dict) else None
+            if not isinstance(shim_provider, dict):
+                record("desktop-provider", "info", f"no durable [model_providers.{PROVIDER_NAME}] block is configured")
+            elif (
+                shim_provider.get("base_url") == f"http://{DEFAULT_HOST}:{port}/v1"
+                and shim_provider.get("wire_api") == "responses"
+            ):
+                record("desktop-provider", "pass", "durable Desktop provider points to the loopback Responses endpoint")
+            else:
+                record("desktop-provider", "fail", f"[model_providers.{PROVIDER_NAME}] does not match the local Responses endpoint")
+    else:
+        record("official-routing", "info", f"{CODEX_CONFIG_PATH} does not exist")
+        record("desktop-provider", "info", f"no durable [model_providers.{PROVIDER_NAME}] block is configured")
+
+    counts = {status_value: sum(check["status"] == status_value for check in checks) for status_value in ("pass", "info", "fail")}
+    payload = {"ready": counts["fail"] == 0, "counts": counts, "checks": checks}
+    if json_output:
+        print(json.dumps(payload, indent=2, sort_keys=True))
+    else:
+        for check in checks:
+            print(f"[{check['status'].upper()}] {check['id']}: {check['detail']}")
+        print(f"Summary: {counts['pass']} pass, {counts['info']} info, {counts['fail']} fail")
+    return 0 if payload["ready"] else 1
 
 
 def ensure_started(settings_path: Path, port: int) -> None:

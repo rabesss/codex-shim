@@ -71,20 +71,22 @@ and Codex-specific capability metadata.
 ```bash
 git clone https://github.com/rabesss/codex-shim.git
 cd codex-shim
-
-python3 -m venv .venv
-. .venv/bin/activate
-python3 -m pip install -e ".[dev]"
-
-# With the CLIProxyAPI discovery credential available in this shell:
-codex-shim desktop write-models --output ~/.codex-shim/models.json
-codex-shim generate
-codex-shim start
-codex-shim status
+scripts/install-user.sh
+codex-shim doctor
 ```
 
+The installer creates an isolated venv, `~/.local/bin/codex-shim`, a generated
+model matrix, and a credential-neutral `codex-shim.service`. It never writes
+provider keys. Add encrypted systemd credentials or another protected
+credential source separately, then regenerate the matrix after provider
+changes so catalog rows do not become stale.
+
+Use `scripts/install-user.sh --no-service` when another supervisor owns the
+process. For development, use `python3 -m venv .venv` followed by
+`python3 -m pip install -e ".[dev]"` instead.
+
 Without a discovery credential, `desktop write-models` uses a built-in model
-snapshot. Regenerate after provider changes so catalog rows do not become stale.
+snapshot.
 Generated runtime state lives in `${XDG_STATE_HOME:-~/.local/state}/codex-shim`
 by default. Set `CODEX_SHIM_RUNTIME_DIR` only when you intentionally want an
 alternate local state directory.
@@ -107,7 +109,24 @@ The default generated thresholds are:
 - `auto_compact_token_limit`: 82% of the context window.
 - `truncation_limit`: 22% of the context window, capped at 128,000 tokens.
 
-Set these before regenerating `models.json` if you want a different policy:
+For a persistent per-model policy, select by exact slug, upstream model id, or
+display name. `--all` applies a shared display name to every matching route:
+
+```bash
+codex-shim desktop compaction set "GLM 5.2" 165k --truncation 48k --all
+systemctl --user restart codex-shim.service
+
+codex-shim desktop compaction list
+codex-shim desktop compaction clear "GLM 5.2" --all
+```
+
+Overrides are stored next to `models.json` in
+`desktop-model-overrides.json`, update the current matrix immediately, and are
+reapplied after future `desktop write-models` runs. They change compaction and
+history truncation without changing the advertised context window.
+
+Set ratios before regenerating `models.json` when you want a different global
+default instead:
 
 ```bash
 CODEX_SHIM_AUTO_COMPACT_RATIO=0.9 \
@@ -117,7 +136,8 @@ codex-shim desktop write-models --output ~/.codex-shim/models.json
 
 Values are ratios from `0` to `1`; invalid values fall back to the defaults.
 Explicit `autoCompactTokenLimit` or `truncationLimit` metadata from
-CLIProxyAPI still wins over the ratio.
+CLIProxyAPI wins over the ratio. A persisted per-model override is applied
+last.
 
 `codex-shim enable` writes a separate opt-in profile and wrapper. It does not
 need to change the top-level provider used by normal Codex. For the integrated
@@ -148,6 +168,8 @@ tool with an executor.
 
 - The server binds to loopback by default.
 - Host-header checks reject untrusted hosts to reduce DNS-rebinding exposure.
+- Browser picker mutations require an unguessable token embedded in the picker
+  page, so another local-origin page cannot switch models with a blind POST.
 - Catalog responses contain capability and route metadata, not provider keys.
 - Provider credentials belong in CLIProxyAPI or a credential manager.
 - Do not commit generated `models.json`, auth files, logs, request dumps, or
@@ -171,9 +193,9 @@ tool with an executor.
 - Stale `provider: commandcode` rows are normalized to the local CLIProxyAPI
   OpenAI-compatible route. Regenerate `models.json` after provider changes so
   capability metadata, especially `supports_tools`, stays accurate.
-- Context windows and compaction timing are generated into `models.json`.
-  Regenerate after changing CLIProxyAPI metadata or
-  `CODEX_SHIM_AUTO_COMPACT_RATIO` / `CODEX_SHIM_TRUNCATION_RATIO`.
+- Context windows and default compaction timing are generated into
+  `models.json`. Regenerate after changing CLIProxyAPI metadata or global ratio
+  settings; per-model `desktop compaction` overrides persist across regeneration.
 - CLIProxyAPI discovery falls back to a static snapshot when unavailable. That
   keeps setup deterministic but may show routes that need regeneration.
 - Browser extension constraints such as invisible `target="_blank"` tabs,

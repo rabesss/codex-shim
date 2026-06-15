@@ -46,10 +46,17 @@ traffic bypasses both services.
 ```bash
 git clone https://github.com/rabesss/codex-shim.git
 cd codex-shim
-python3 -m venv .venv
-. .venv/bin/activate
-python3 -m pip install -e ".[dev]"
+scripts/install-user.sh
+codex-shim doctor
 ```
+
+This installs an isolated user venv, a launcher under `~/.local/bin`, the
+initial model matrix, and a systemd user service. The generated unit is
+credential-neutral. Add any required `LoadCredentialEncrypted=` entries in a
+systemd drop-in; do not add plaintext provider keys to the unit or repository.
+
+Use `scripts/install-user.sh --no-service` if another supervisor will run the
+server. Contributors can use an editable development venv instead.
 
 Make the discovery credential available through your credential manager, then
 generate a model matrix from live CLIProxyAPI discovery:
@@ -71,7 +78,24 @@ coding-plan aliases, including GLM 5.2 and MiniMax M3 long-context rows.
 
 Default generated compaction starts at 82% of the model context window, while
 history truncation is 22% capped at 128,000 tokens. To change those thresholds,
-set ratios before regenerating:
+use a persistent per-model override:
+
+```bash
+codex-shim desktop compaction set "GLM 5.2" 165k --truncation 48k --all
+systemctl --user restart codex-shim.service
+codex-shim desktop compaction list
+```
+
+The model still advertises its full context window. Only automatic compaction
+and truncation move earlier. The sibling `desktop-model-overrides.json` file is
+reapplied whenever the matrix is regenerated. Clear the policy with:
+
+```bash
+codex-shim desktop compaction clear "GLM 5.2" --all
+```
+
+To change the global generated defaults instead, set ratios before
+regenerating:
 
 ```bash
 CODEX_SHIM_AUTO_COMPACT_RATIO=0.9 \
@@ -79,7 +103,8 @@ CODEX_SHIM_TRUNCATION_RATIO=0.1 \
 codex-shim desktop write-models --output ~/.codex-shim/models.json
 ```
 
-Explicit limits returned by CLIProxyAPI take precedence over these ratios.
+Explicit limits returned by CLIProxyAPI take precedence over these ratios, and
+persisted per-model overrides are applied last.
 
 Start the service:
 
@@ -87,6 +112,7 @@ Start the service:
 codex-shim generate
 codex-shim start
 codex-shim status
+codex-shim doctor --json
 curl -s http://127.0.0.1:8765/health
 ```
 
@@ -237,7 +263,7 @@ Then verify through the installed Desktop UI:
 | Custom rows are absent | Verify `custom-model-catalog` was enabled and `/api/models` is reachable. |
 | Shim reports no usable models | Regenerate `models.json` with the discovery credential available and verify request-time credentials. |
 | Context footer shows the wrong model limit | Update codex-shim, rerun `desktop write-models` with the discovery credential available, restart the service, then inspect `/api/models` and the generated catalog for the new limits. |
-| Desktop compacts too early or too late | Regenerate `models.json` with `CODEX_SHIM_AUTO_COMPACT_RATIO` and restart the shim service. |
+| Desktop compacts too early or too late | Use `codex-shim desktop compaction set <slug-or-display-name> <tokens>`, restart the service, and verify with `desktop compaction list`. |
 | Custom thread fails only after restart | Restore the durable non-default `[model_providers.codex_shim]` block. |
 | `/goal` child no longer reaches the shim | Rebuild `codex-desktop-control` from current `main`; old fork payloads dropped provider state. |
 | Browser tool is visible but returns `unsupported call` | Update both repos, confirm the row has `supports_tools: true`, and inspect returned `type`, `namespace`, and `name` fields. |

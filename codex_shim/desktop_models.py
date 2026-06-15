@@ -122,7 +122,11 @@ CAPABILITY_OVERRIDES: dict[tuple[str, str], dict[str, Any]] = {
         "reasoning": True,
     },
     ("xai", "grok-4.20-0309-non-reasoning"): {"context": 2_000_000, "output": 30_000, "image": True},
-    ("cursor-zai-coding", "zai-coding/glm-5.2"): {"context": 1_000_000, "output": 131_072, "reasoning": True},
+    ("cursor-zai-coding", "zai-coding/glm-5.2"): {
+        "context": 1_000_000,
+        "output": 131_072,
+        "reasoning": True,
+    },
     ("cursor-zai-coding", "glm-5.2"): {"context": 1_000_000, "output": 131_072, "reasoning": True},
     ("cursor-minimax-coding", "minimax-coding/MiniMax-M3"): {
         "context": 1_000_000,
@@ -139,6 +143,7 @@ def desktop_models_payload(
     include_commandcode: bool = True,
     include_cpa_oauth: bool = True,
     cliproxyapi_models: Iterable[dict[str, Any]] | None = None,
+    model_overrides: dict[str, dict[str, int]] | None = None,
 ) -> dict[str, Any]:
     """Return a Codex-compatible model matrix backed by CLIProxyAPI.
 
@@ -154,6 +159,7 @@ def desktop_models_payload(
         include_commandcode=include_commandcode,
         include_cpa_oauth=include_cpa_oauth,
     )
+    _apply_model_overrides(rows, model_overrides or {})
     return {"models": rows}
 
 
@@ -162,15 +168,172 @@ def write_desktop_models(
     *,
     include_commandcode: bool = True,
     include_cpa_oauth: bool = True,
+    overrides_path: Path | None = None,
 ) -> Path:
     path = Path(path).expanduser()
     path.parent.mkdir(parents=True, exist_ok=True)
+    overrides = load_desktop_model_overrides(overrides_path or desktop_overrides_path(path))
     payload = desktop_models_payload(
         include_commandcode=include_commandcode,
         include_cpa_oauth=include_cpa_oauth,
+        model_overrides=overrides,
     )
-    path.write_text(json.dumps(payload, indent=2) + "\n")
+    _write_json(path, payload)
     return path
+
+
+def desktop_overrides_path(settings_path: Path) -> Path:
+    return Path(settings_path).expanduser().with_name("desktop-model-overrides.json")
+
+
+def load_desktop_model_overrides(path: Path) -> dict[str, dict[str, int]]:
+    path = Path(path).expanduser()
+    try:
+        payload = json.loads(path.read_text())
+    except FileNotFoundError:
+        return {}
+    if not isinstance(payload, dict) or not isinstance(payload.get("models", {}), dict):
+        raise ValueError(f"Desktop model overrides must contain a models object: {path}")
+
+    overrides: dict[str, dict[str, int]] = {}
+    for slug, raw in payload.get("models", {}).items():
+        if not isinstance(slug, str) or not isinstance(raw, dict):
+            raise ValueError(f"Desktop model override entries must map slugs to objects: {path}")
+        entry: dict[str, int] = {}
+        for key in ("auto_compact_token_limit", "truncation_limit"):
+            value = _positive_int(raw.get(key))
+            if value is not None:
+                entry[key] = value
+        if entry:
+            overrides[slug] = entry
+    return overrides
+
+
+def update_desktop_compaction_override(
+    settings_path: Path,
+    selector: str,
+    *,
+    compact_limit: int | None = None,
+    truncation_limit: int | None = None,
+    clear: bool = False,
+    match_all: bool = False,
+    overrides_path: Path | None = None,
+) -> list[str]:
+    settings_path = Path(settings_path).expanduser()
+    overrides_path = Path(overrides_path or desktop_overrides_path(settings_path)).expanduser()
+    payload = json.loads(settings_path.read_text())
+    rows = payload.get("models") if isinstance(payload, dict) else None
+    if not isinstance(rows, list):
+        raise ValueError(f"Desktop model settings must contain a models array: {settings_path}")
+
+    matches = _matching_model_rows(rows, selector)
+    if not matches:
+        raise ValueError(f"No desktop model matches selector: {selector}")
+    if len(matches) > 1 and not match_all:
+        slugs = ", ".join(str(row.get("slug")) for row in matches)
+        raise ValueError(f"Selector matches multiple models; use an exact slug or --all: {slugs}")
+    if not clear:
+        if compact_limit is None and truncation_limit is None:
+            raise ValueError("At least one compaction or truncation limit is required")
+        if compact_limit is not None and _positive_int(compact_limit) is None:
+            raise ValueError("Compaction limit must be a positive integer")
+        if truncation_limit is not None and _positive_int(truncation_limit) is None:
+            raise ValueError("Truncation limit must be a positive integer")
+        for row in matches:
+            context_limit = _positive_int(row.get("max_context_limit"))
+            effective_compact = compact_limit if compact_limit is not None else _positive_int(row.get("auto_compact_token_limit"))
+            effective_truncation = (
+                truncation_limit if truncation_limit is not None else _positive_int(row.get("truncation_limit"))
+            )
+            if context_limit is not None and effective_compact is not None and effective_compact > context_limit:
+                raise ValueError(f"Compaction limit exceeds context window for {row['slug']}: {effective_compact} > {context_limit}")
+            if effective_compact is not None and effective_truncation is not None and effective_truncation > effective_compact:
+                raise ValueError(
+                    f"Truncation limit exceeds compaction limit for {row['slug']}: "
+                    f"{effective_truncation} > {effective_compact}"
+                )
+
+    stored = _read_override_document(overrides_path)
+    stored_models = stored.setdefault("models", {})
+    changed_slugs: list[str] = []
+    for row in matches:
+        slug = str(row["slug"])
+        changed_slugs.append(slug)
+        if clear:
+            previous = stored_models.pop(slug, {})
+            for key in ("auto_compact_token_limit", "truncation_limit"):
+                prior_value = _positive_int(previous.get(f"previous_{key}")) if isinstance(previous, dict) else None
+                if prior_value is not None:
+                    row[key] = prior_value
+            continue
+
+        existing = stored_models.get(slug)
+        entry = dict(existing) if isinstance(existing, dict) else {}
+        if compact_limit is not None:
+            entry.setdefault("previous_auto_compact_token_limit", row.get("auto_compact_token_limit"))
+            entry["auto_compact_token_limit"] = compact_limit
+            row["auto_compact_token_limit"] = compact_limit
+        if truncation_limit is not None:
+            entry.setdefault("previous_truncation_limit", row.get("truncation_limit"))
+            entry["truncation_limit"] = truncation_limit
+            row["truncation_limit"] = truncation_limit
+        stored_models[slug] = entry
+
+    _write_json(settings_path, payload)
+    _write_json(overrides_path, stored)
+    return changed_slugs
+
+
+def _matching_model_rows(rows: list[Any], selector: str) -> list[dict[str, Any]]:
+    candidates = [row for row in rows if isinstance(row, dict) and isinstance(row.get("slug"), str)]
+    exact_slug = [row for row in candidates if row["slug"] == selector]
+    if exact_slug:
+        return exact_slug
+    exact_model = [row for row in candidates if row.get("model") == selector]
+    if exact_model:
+        return exact_model
+    normalized = selector.casefold()
+    return [
+        row
+        for row in candidates
+        if isinstance(row.get("display_name"), str) and row["display_name"].casefold() == normalized
+    ]
+
+
+def _read_override_document(path: Path) -> dict[str, Any]:
+    try:
+        payload = json.loads(path.read_text())
+    except FileNotFoundError:
+        return {"models": {}}
+    if not isinstance(payload, dict) or not isinstance(payload.get("models", {}), dict):
+        raise ValueError(f"Desktop model overrides must contain a models object: {path}")
+    return payload
+
+
+def _apply_model_overrides(rows: list[dict[str, Any]], overrides: dict[str, dict[str, int]]) -> None:
+    for row in rows:
+        override = overrides.get(str(row.get("slug") or ""))
+        if not override:
+            continue
+        for key in ("auto_compact_token_limit", "truncation_limit"):
+            value = _positive_int(override.get(key))
+            if value is not None:
+                row[key] = value
+
+
+def _positive_int(value: Any) -> int | None:
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value if value > 0 else None
+    return None
+
+
+def _write_json(path: Path, payload: Any) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_name(f".{path.name}.tmp")
+    temporary.write_text(json.dumps(payload, indent=2) + "\n")
+    temporary.replace(path)
 
 
 def discover_cliproxyapi_models(

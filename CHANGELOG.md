@@ -12,6 +12,14 @@ Current platform support and integration ownership are defined by the README.
 
 ### Added
 
+- Added a user-scoped installer that creates an isolated venv, CLI launcher,
+  generated model matrix, and credential-neutral systemd user service.
+- Added `codex-shim doctor [--json]` to validate model settings, compaction
+  overrides, loopback health, direct official routing, and the durable Desktop
+  provider block.
+- Added persistent per-model compaction controls through `codex-shim desktop
+  compaction set|list|clear`, including human-readable token counts and exact
+  display-name selection across multiple provider routes.
 - Documented the maintained two-repository architecture with
   `rabesss/codex-desktop-control`, including setup, provider persistence,
   `/goal` fork behavior, validation, and remaining Browser backend constraints.
@@ -106,6 +114,8 @@ Current platform support and integration ownership are defined by the README.
 
 ### Fixed
 
+- Model-picker mutation requests now require a per-process unguessable token in
+  addition to the existing loopback Host-header guard.
 - Responses namespace tools are flattened for OpenAI-chat and
   Anthropic-compatible providers, including call history, then restored to
   their original namespace and child name in returned tool calls. This enables

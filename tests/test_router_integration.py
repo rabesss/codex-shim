@@ -563,9 +563,15 @@ async def test_switch_model_accepts_auto_slug(tmp_path, monkeypatch):
     monkeypatch.setattr(server_module, "_set_active_model", lambda slug, display=None: captured.update({"slug": slug, "display": display}))
     state = {}
     upstream = await make_upstream(state)
-    shim = await _shim(_settings(tmp_path, str(upstream.make_url("/v1"))))
+    server = ShimServer(_settings(tmp_path, str(upstream.make_url("/v1"))))
+    shim = TestClient(TestServer(server.app()))
+    await shim.start_server()
 
-    resp = await shim.post("/api/switch", json={"slug": "codex-auto", "restart_codex": False})
+    resp = await shim.post(
+        "/api/switch",
+        json={"slug": "codex-auto", "restart_codex": False},
+        headers={"X-Codex-Shim-Picker-Token": server.picker_token},
+    )
     assert resp.status == 200
     data = await resp.json()
     assert data["ok"] is True and data["model"] == "codex-auto"

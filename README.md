@@ -6,7 +6,7 @@ then translates requests to CLIProxyAPI-backed OpenAI-chat or
 Anthropic-compatible routes.
 
 This is a maintained fork of
-[`0xSero/codex-shim`](https://github.com/0xSero/codex-shim). Generic and
+[`sybil-solutions/codex-shim`](https://github.com/sybil-solutions/codex-shim). Generic and
 non-Linux workflows remain upstream.
 
 ## Companion Repository
@@ -181,6 +181,10 @@ tool with an executor.
 
 - The integrated picker requires the `custom-model-catalog` feature from the
   companion Desktop repository.
+- That feature passes this shim's generated native catalog into every custom
+  thread. Picker labels alone do not configure Codex core; the catalog path is
+  what applies each model's context, compaction, truncation, image, reasoning,
+  and tool metadata at runtime.
 - Saved custom threads require a durable, non-default `codex_shim` provider
   definition after Desktop restarts.
 - Older Desktop builds could lose the provider during `thread/fork`, including

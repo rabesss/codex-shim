@@ -904,6 +904,9 @@ async def test_api_models_lists_configured_models_with_active_flag(
         assert deepseek["model"] == "deepseek-v4-pro"
         assert deepseek["model_provider"] == "codex_shim"
         assert deepseek["owned_by"] == "codex_shim"
+        assert deepseek["model_catalog_json"].endswith(
+            "/codex-shim/custom_model_catalog.json"
+        )
         assert deepseek["input_modalities"] == ["text", "image"]
         assert deepseek["supports_tools"] is True
         assert deepseek["supports_reasoning"] is True

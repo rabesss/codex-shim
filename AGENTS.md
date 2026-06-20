@@ -1,7 +1,7 @@
 # AGENTS.md
 
 Guidance for AI coding agents and reviewers in **codex-shim** — a Linux-focused fork of
-[`0xSero/codex-shim`](https://github.com/0xSero/codex-shim) that bridges Codex Desktop custom
+[`sybil-solutions/codex-shim`](https://github.com/sybil-solutions/codex-shim) that bridges Codex Desktop custom
 rows to CLIProxyAPI. The PR review charter is in [`REVIEW.md`](REVIEW.md).
 
 ## Project
@@ -33,13 +33,3 @@ behavior lives in the companion repo [`rabesss/codex-desktop-control`](https://g
 - **P0** — routing first-party OpenAI traffic through the shim.
 - **P1** — missing tests for changed translation/streaming/tool paths.
 - **P1** — catalog rows with secrets, duplicate slugs, or unsupported capability flags.
-
-## Pullfrog
-
-Pullfrog runs in GitHub Actions with BYOK via Z.AI GLM-5.2:
-
-- Workflow: [`.github/workflows/pullfrog.yml`](.github/workflows/pullfrog.yml)
-- Provider config: [`opencode.json`](opencode.json) (`zai/glm-5.2` via the Z.AI **Coding Plan** endpoint)
-- Secrets: `ZAI_API_KEY` and `PULLFROG_MODEL=zai/glm-5.2` in the **Pullfrog console** (org-level secrets are inherited by every repo)
-
-Pullfrog honors this file and [`REVIEW.md`](REVIEW.md). Dashboard triggers live in the Pullfrog console.

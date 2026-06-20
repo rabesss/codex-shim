@@ -1,5 +1,6 @@
 # Generated runtime + user state
 .codex-shim/
+.codegraph/
 *.log
 *.pid
 

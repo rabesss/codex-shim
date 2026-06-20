@@ -1,7 +1,7 @@
 # REVIEW.md — codex-shim
 
 Canonical PR review guide for this **Linux-focused fork** of
-[`0xSero/codex-shim`](https://github.com/0xSero/codex-shim). Companion Desktop
+[`sybil-solutions/codex-shim`](https://github.com/sybil-solutions/codex-shim). Companion Desktop
 integration lives in [`rabesss/codex-desktop-control`](https://github.com/rabesss/codex-desktop-control).
 
 This fork no longer tracks the upstream project's full review-bot fleet. Configure
@@ -10,7 +10,6 @@ only the agents that actually review here:
 | Reviewer | Config file it reads |
 |----------|----------------------|
 | OpenAI Codex (`chatgpt-codex-connector`) | `AGENTS.md` |
-| Pullfrog (`pullfrog[bot]`) | `AGENTS.md` + Pullfrog dashboard |
 
 > Do not add CodeRabbit, Kilo, Greptile, or Qodo configs unless those bots are
 > explicitly enabled for this repository.

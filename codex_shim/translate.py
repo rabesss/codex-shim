@@ -562,6 +562,8 @@ def _chat_image_part(part: dict[str, Any]) -> dict[str, Any] | None:
         return None
     image_url: dict[str, Any] = {"url": url}
     detail = part.get("detail") or part.get("image_detail")
+    if detail and detail not in ("low", "auto", "high", "xhigh"):
+        detail = "high" if detail == "original" else "auto"
     if detail:
         image_url["detail"] = detail
     return {"type": "image_url", "image_url": image_url}

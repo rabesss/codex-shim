@@ -203,6 +203,9 @@ The routing contract is:
 
 - official picker row: `model_provider=openai`, direct OpenAI/Codex route;
 - custom picker row: session-scoped `model_provider=codex_shim`;
+- custom picker row: session config also includes the generated
+  `model_catalog_json`, so the selected row's context, compaction, truncation,
+  image, reasoning, and tool metadata reaches Codex core;
 - saved custom thread: durable `codex_shim` provider definition resolves after
   restart;
 - shim route: selected model forwards to CLIProxyAPI or another explicitly

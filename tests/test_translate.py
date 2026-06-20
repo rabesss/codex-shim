@@ -307,6 +307,28 @@ def test_responses_to_chat_preserves_input_images_for_vision_models():
     ]
 
 
+def test_responses_to_chat_normalizes_original_image_detail():
+    body = {
+        "model": "slug",
+        "input": [
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "input_image",
+                        "image_url": "data:image/png;base64,AAA",
+                        "detail": "original",
+                    }
+                ],
+            }
+        ],
+    }
+
+    out = responses_to_chat(body, "vision-model")
+
+    assert out["messages"][0]["content"][0]["image_url"]["detail"] == "high"
+
+
 def test_computer_call_output_screenshot_reaches_openai_chat_vision():
     body = {
         "model": "slug",

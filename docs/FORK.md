@@ -1,7 +1,7 @@
 # Fork Maintenance
 
 This repository is a Linux-focused fork of
-[`0xSero/codex-shim`](https://github.com/0xSero/codex-shim) and the companion
+[`sybil-solutions/codex-shim`](https://github.com/sybil-solutions/codex-shim) and the companion
 adapter for
 [`rabesss/codex-desktop-control`](https://github.com/rabesss/codex-desktop-control).
 
@@ -27,13 +27,14 @@ expand them as the primary integration path.
 The expected remotes are:
 
 ```text
-origin  https://github.com/0xSero/codex-shim.git
-fork    https://github.com/rabesss/codex-shim.git
+upstream  https://github.com/sybil-solutions/codex-shim.git
+fork      https://github.com/rabesss/codex-shim.git
 ```
 
 Before rebasing or merging upstream:
 
-1. Review `git diff origin/main...main` and classify each fork-owned change.
+1. Fetch `upstream`, then review `git log --left-right main...upstream/main`
+   and classify each upstream change against the fork-owned implementation.
 2. Preserve loopback/Host-header security checks and credential behavior.
 3. Re-run translation tests, especially streaming and namespace tools.
 4. Re-run the cross-repository Desktop fork/resume/Browser smoke path.

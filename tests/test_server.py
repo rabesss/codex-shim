@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 import pytest
 from aiohttp import web
@@ -890,9 +891,11 @@ async def test_api_models_lists_configured_models_with_active_flag(
     shim_client = TestClient(TestServer(ShimServer(settings).app()))
     await shim_client.start_server()
     try:
-        resp = await shim_client.get("/api/models")
+        resp = await shim_client.get(
+            "/api/models", headers={"Origin": "http://127.0.0.1:5175"}
+        )
         assert resp.status == 200
-        assert resp.headers["Access-Control-Allow-Origin"] == "*"
+        assert resp.headers["Access-Control-Allow-Origin"] == "http://127.0.0.1:5175"
         assert resp.headers["Access-Control-Allow-Methods"] == "GET, OPTIONS"
         assert resp.headers["Access-Control-Allow-Private-Network"] == "true"
         data = await resp.json()
@@ -904,9 +907,7 @@ async def test_api_models_lists_configured_models_with_active_flag(
         assert deepseek["model"] == "deepseek-v4-pro"
         assert deepseek["model_provider"] == "codex_shim"
         assert deepseek["owned_by"] == "codex_shim"
-        assert deepseek["model_catalog_json"].endswith(
-            "/codex-shim/custom_model_catalog.json"
-        )
+        assert "model_catalog_json" not in deepseek
         assert deepseek["input_modalities"] == ["text", "image"]
         assert deepseek["supports_tools"] is True
         assert deepseek["supports_reasoning"] is True
@@ -924,17 +925,61 @@ async def test_api_models_answers_browser_preflight(tmp_path, auth_missing):
         resp = await shim_client.options(
             "/api/models",
             headers={
-                "Origin": "http://127.0.0.1:5180",
+                "Origin": "http://127.0.0.1:5175",
                 "Access-Control-Request-Method": "GET",
                 "Access-Control-Request-Private-Network": "true",
             },
         )
         assert resp.status == 204
-        assert resp.headers["Access-Control-Allow-Origin"] == "http://127.0.0.1:5180"
+        assert resp.headers["Access-Control-Allow-Origin"] == "http://127.0.0.1:5175"
         assert resp.headers["Access-Control-Allow-Methods"] == "GET, OPTIONS"
         assert resp.headers["Access-Control-Allow-Private-Network"] == "true"
     finally:
         await shim_client.close()
+
+
+async def test_api_models_rejects_untrusted_browser_origin(tmp_path, auth_missing):
+    settings = _picker_settings_file(tmp_path)
+    shim_client = TestClient(TestServer(ShimServer(settings).app()))
+    await shim_client.start_server()
+    try:
+        resp = await shim_client.options(
+            "/api/models",
+            headers={
+                "Origin": "https://example.test",
+                "Access-Control-Request-Method": "GET",
+                "Access-Control-Request-Private-Network": "true",
+            },
+        )
+        assert resp.status == 204
+        assert "Access-Control-Allow-Origin" not in resp.headers
+        assert "Access-Control-Allow-Private-Network" not in resp.headers
+    finally:
+        await shim_client.close()
+
+
+def test_request_body_dumps_are_disabled_by_default(monkeypatch, tmp_path):
+    monkeypatch.setattr(server_module, "DEBUG_DIR", tmp_path)
+    monkeypatch.delenv("CODEX_SHIM_DEBUG_DUMP_REQUESTS", raising=False)
+
+    server_module._dump_incoming_request("/v1/responses", {"secret": "not-written"})
+    server_module._dump_debug_request("custom", "http://127.0.0.1", {"secret": "not-written"})
+
+    assert not (tmp_path / "last_incoming_request.json").exists()
+    assert not (tmp_path / "last_request.json").exists()
+
+
+def test_request_body_dumps_are_private_when_explicitly_enabled(monkeypatch, tmp_path):
+    monkeypatch.setattr(server_module, "DEBUG_DIR", tmp_path)
+    monkeypatch.setenv("CODEX_SHIM_DEBUG_DUMP_REQUESTS", "1")
+
+    server_module._dump_incoming_request("/v1/responses", {"input": []})
+    server_module._dump_debug_request("custom", "http://127.0.0.1", {"messages": []})
+
+    for name in ("last_incoming_request.json", "last_request.json"):
+        dump_path = tmp_path / name
+        assert dump_path.is_file()
+        assert dump_path.stat().st_mode & 0o777 == 0o600
 
 
 async def test_api_models_includes_chatgpt_when_auth_present(

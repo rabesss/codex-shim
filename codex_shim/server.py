@@ -8,7 +8,7 @@ import secrets
 import sys
 import time
 from pathlib import Path
-from typing import Any
+from typing import Any, Final
 from urllib.parse import urljoin
 
 from aiohttp import ClientSession, ClientTimeout, web
@@ -71,20 +71,26 @@ API_MODELS_CORS_ALLOW_HEADERS = (
     "accept, authorization, content-type, x-requested-with, "
     "access-control-request-private-network"
 )
+API_MODELS_ALLOWED_ORIGINS: Final[frozenset[str]] = frozenset(
+    {"http://127.0.0.1:5175", "http://localhost:5175"}
+)
+REQUEST_DUMP_ENV: Final[str] = "CODEX_SHIM_DEBUG_DUMP_REQUESTS"
 
 
 def _api_models_cors_headers(request: web.Request) -> dict[str, str]:
-    origin = request.headers.get("Origin") or "*"
-    return {
-        "Access-Control-Allow-Origin": origin,
+    headers = {
         "Access-Control-Allow-Methods": "GET, OPTIONS",
         "Access-Control-Allow-Headers": API_MODELS_CORS_ALLOW_HEADERS,
-        "Access-Control-Allow-Private-Network": "true",
         "Vary": (
             "Origin, Access-Control-Request-Method, "
             "Access-Control-Request-Headers, Access-Control-Request-Private-Network"
         ),
     }
+    origin = request.headers.get("Origin")
+    if origin in API_MODELS_ALLOWED_ORIGINS:
+        headers["Access-Control-Allow-Origin"] = origin
+        headers["Access-Control-Allow-Private-Network"] = "true"
+    return headers
 
 
 class ShimServer:
@@ -980,7 +986,6 @@ def _api_model_entry(model: ShimModel, *, active: bool) -> dict[str, Any]:
         "max_context_window": entry.get("max_context_window"),
         "auto_compact_token_limit": entry.get("auto_compact_token_limit"),
         "truncation_policy": entry.get("truncation_policy"),
-        "model_catalog_json": str(DEBUG_DIR / "custom_model_catalog.json"),
         "input_modalities": entry.get("input_modalities", ["text"]),
         "supports_image_detail_original": entry.get("supports_image_detail_original", False),
         "supports_tools": entry.get("supports_parallel_tool_calls", False),
@@ -1029,7 +1034,6 @@ def _api_catalog_entry(
         "max_context_window": entry.get("max_context_window"),
         "auto_compact_token_limit": entry.get("auto_compact_token_limit"),
         "truncation_policy": entry.get("truncation_policy"),
-        "model_catalog_json": str(DEBUG_DIR / "custom_model_catalog.json"),
         "input_modalities": input_modalities,
         "supports_image_detail_original": entry.get("supports_image_detail_original", False),
         "supports_tools": entry.get("supports_parallel_tool_calls", False),
@@ -1757,8 +1761,24 @@ def _build_tool_types(body: dict[str, Any]) -> dict[str, str]:
     return responses_tool_type_map(body.get("tools"))
 
 
+def _request_dumps_enabled() -> bool:
+    return os.environ.get(REQUEST_DUMP_ENV, "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _write_private_text(path: Path, content: str) -> None:
+    descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    try:
+        os.fchmod(descriptor, 0o600)
+        with os.fdopen(descriptor, "w", encoding="utf-8", closefd=False) as handle:
+            handle.write(content)
+    finally:
+        os.close(descriptor)
+
+
 def _dump_incoming_request(endpoint: str, body: dict[str, Any]) -> None:
     """Best-effort dump of the last incoming Responses body before translation."""
+    if not _request_dumps_enabled():
+        return
     try:
         dump_path = DEBUG_DIR / "last_incoming_request.json"
         dump_path.parent.mkdir(parents=True, exist_ok=True)
@@ -1778,9 +1798,9 @@ def _dump_incoming_request(endpoint: str, body: dict[str, Any]) -> None:
                 "input_count": len(inputs) if isinstance(inputs, list) else 0,
                 "last_6_input": inputs[-6:] if isinstance(inputs, list) else inputs,
             }
-            dump_path.write_text(json.dumps(payload, indent=2, default=str))
+            _write_private_text(dump_path, json.dumps(payload, indent=2, default=str))
         else:
-            dump_path.write_text(full)
+            _write_private_text(dump_path, full)
     except OSError as exc:
         print(f"[debug] incoming dump failed: {exc}", flush=True)
 
@@ -1910,6 +1930,8 @@ def _dump_debug_request(slug: str, url: str, body: dict[str, Any]) -> None:
     state (catalog, pid, log). Failures are silently swallowed — this is a
     debug aid, not a code path the request should depend on.
     """
+    if not _request_dumps_enabled():
+        return
     try:
         dump_path = DEBUG_DIR / "last_request.json"
         dump_path.parent.mkdir(parents=True, exist_ok=True)
@@ -1926,9 +1948,9 @@ def _dump_debug_request(slug: str, url: str, body: dict[str, Any]) -> None:
                 "tool_count": len(body.get("tools") or []),
                 "last_3_messages": messages[-3:],
             }
-            dump_path.write_text(json.dumps(summary, indent=2, default=str))
+            _write_private_text(dump_path, json.dumps(summary, indent=2, default=str))
         else:
-            dump_path.write_text(full)
+            _write_private_text(dump_path, full)
     except OSError as exc:
         print(f"[debug] dump failed: {exc}", flush=True)
 

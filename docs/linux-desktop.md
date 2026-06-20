@@ -119,8 +119,12 @@ curl -s http://127.0.0.1:8765/health
 `generate` and `start` write runtime files under
 `${XDG_STATE_HOME:-~/.local/state}/codex-shim` by default, including the
 generated catalog, generated Codex profile, PID file, shim log, and diagnostic
-request dumps. Use `CODEX_SHIM_RUNTIME_DIR=/path/to/state` only for an explicit
-development or test override.
+state. Full request dumps are disabled by default. Set
+`CODEX_SHIM_DEBUG_DUMP_REQUESTS=1` only for an explicit debugging session; the
+resulting `last_incoming_request.json` and `last_request.json` files are mode
+`0600` and may contain prompts or tool payloads. Use
+`CODEX_SHIM_RUNTIME_DIR=/path/to/state` only for an explicit development or
+test override.
 
 For a durable service, run the same module from a user service and inject
 credentials through an environment file with protected permissions or systemd
@@ -197,7 +201,9 @@ curl -s http://127.0.0.1:8765/api/models
 
 The Desktop catalog response should contain model and capability metadata but
 no fields named like API keys, bearer tokens, authorization headers, or secret
-values.
+values. It also omits the local generated-catalog path. Browser CORS access is
+limited to the installed Desktop webview origins on port `5175`; direct
+loopback CLI requests remain available without browser CORS headers.
 
 The routing contract is:
 

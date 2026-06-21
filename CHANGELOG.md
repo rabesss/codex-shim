@@ -114,6 +114,10 @@ Current platform support and integration ownership are defined by the README.
 
 ### Fixed
 
+- Desktop catalog rows now keep route provenance out of the primary
+  `display_name`. The main picker label uses the clean model name, while
+  `provider_display_name` carries `CLIProxyAPI / ...` metadata and
+  `cursor-*` route owners are presented as their underlying route labels.
 - Model-picker mutation requests now require a per-process unguessable token in
   addition to the existing loopback Host-header guard.
 - Responses namespace tools are flattened for OpenAI-chat and

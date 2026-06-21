@@ -34,6 +34,12 @@ Workspaces, a hidden workspace browser, or `agent-workspace-linux`.
 CLIProxyAPI owns provider routes and provider credentials. Official OpenAI/Codex
 traffic bypasses both services.
 
+OpenAI Codex also supports `--oss` for direct local Ollama and LM Studio
+providers. That is a separate local-provider mode, not a replacement for this
+CLIProxyAPI-backed custom Desktop package path. See OpenAI's
+[OSS mode documentation](https://developers.openai.com/codex/config-advanced#oss-mode-local-providers)
+for the direct local-provider flow.
+
 ## Prerequisites
 
 - Python 3.11 or newer.
@@ -205,6 +211,17 @@ values. It also omits the local generated-catalog path. Browser CORS access is
 limited to the installed Desktop webview origins on port `5175`; direct
 loopback CLI requests remain available without browser CORS headers.
 
+The visible label contract is:
+
+- `display_name`: clean model name shown as the primary picker label.
+- `provider_display_name`: route provenance such as
+  `CLIProxyAPI / CommandCode`.
+- `slug`: stable route identifier used for routing, saved threads, and
+  per-model overrides. It may keep legacy route prefixes such as `cursor-`.
+
+Do not use `display_name` for local relay names, account names, credential
+hints, or other transient machine-specific details.
+
 The routing contract is:
 
 - official picker row: `model_provider=openai`, direct OpenAI/Codex route;
@@ -271,6 +288,7 @@ Then verify through the installed Desktop UI:
 |---|---|
 | Custom rows are absent | Verify `custom-model-catalog` was enabled and `/api/models` is reachable. |
 | Shim reports no usable models | Regenerate `models.json` with the discovery credential available and verify request-time credentials. |
+| Desktop shows `CLIProxyAPI / Cursor ...` as the main model label | Update codex-shim, rerun `desktop write-models`, restart `codex-shim.service`, then restart Desktop so primary labels come from clean `display_name` values. |
 | Context footer shows the wrong model limit | Update codex-shim, rerun `desktop write-models` with the discovery credential available, restart the service, then inspect `/api/models` and the generated catalog for the new limits. |
 | Desktop compacts too early or too late | Use `codex-shim desktop compaction set <slug-or-display-name> <tokens>`, restart the service, and verify with `desktop compaction list`. |
 | Custom thread fails only after restart | Restore the durable non-default `[model_providers.codex_shim]` block. |

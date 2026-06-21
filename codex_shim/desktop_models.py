@@ -435,7 +435,7 @@ def _looks_like_chat_model(model_id: str) -> bool:
 
 def _row_from_cliproxyapi(*, owner: str, model_id: str, index: int, raw: dict[str, Any] | None = None) -> dict[str, Any]:
     caps = _capabilities(owner, model_id, raw=raw)
-    route_label = OWNER_LABELS.get(owner, _label_from_slug(owner))
+    route_label = _route_label(owner)
     return {
         "slug": _route_slug(owner, model_id),
         "model": model_id,
@@ -467,6 +467,16 @@ def _row_from_cliproxyapi(*, owner: str, model_id: str, index: int, raw: dict[st
         "index": index,
         "generated_by": "codex-shim-cliproxyapi-discovery",
     }
+
+
+def _route_label(owner: str) -> str:
+    label = OWNER_LABELS.get(owner)
+    if label is not None:
+        return label
+    if owner.startswith("cursor-"):
+        source_owner = owner.removeprefix("cursor-")
+        return OWNER_LABELS.get(source_owner, _label_from_slug(source_owner))
+    return _label_from_slug(owner)
 
 
 def _capabilities(owner: str, model_id: str, raw: dict[str, Any] | None = None) -> dict[str, Any]:

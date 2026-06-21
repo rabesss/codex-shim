@@ -214,6 +214,11 @@ def test_desktop_model_matrix_can_use_live_cliproxyapi_discovery():
                 "supportsImageInputs": True,
                 "supportsReasoning": True,
             },
+            {
+                "id": "step-3.7-flash:free",
+                "owned_by": "cursor-nous-portal",
+                "contextWindow": 128000,
+            },
             {"id": "grok-4.3", "owned_by": "xai"},
             {"id": "grok-imagine-image", "owned_by": "xai"},
             {"id": "commandcode/deepseek/deepseek-v4-pro", "owned_by": "cursor-commandcode"},
@@ -221,9 +226,16 @@ def test_desktop_model_matrix_can_use_live_cliproxyapi_discovery():
     )
     rows = {row["slug"]: row for row in payload["models"]}
 
-    assert set(rows) == {"commandcode-deepseek-v4-flash", "example-provider-custom-long", "grok-4-3"}
+    assert set(rows) == {
+        "commandcode-deepseek-v4-flash",
+        "cursor-nous-portal-step-3-7-flash-free",
+        "example-provider-custom-long",
+        "grok-4-3",
+    }
     assert rows["commandcode-deepseek-v4-flash"]["model"] == "deepseek/deepseek-v4-flash"
     assert rows["commandcode-deepseek-v4-flash"]["provider_display_name"] == "CLIProxyAPI / CommandCode"
+    assert rows["cursor-nous-portal-step-3-7-flash-free"]["display_name"] == "Step 3.7 Flash:free"
+    assert rows["cursor-nous-portal-step-3-7-flash-free"]["provider_display_name"] == "CLIProxyAPI / Nous Portal"
     assert rows["example-provider-custom-long"]["max_context_limit"] == 777000
     assert rows["example-provider-custom-long"]["max_output_tokens"] == 65536
     assert rows["example-provider-custom-long"]["auto_compact_token_limit"] == 710000
@@ -443,19 +455,23 @@ def test_desktop_model_matrix_keeps_xiaomi_mimo_token_plan_text_only():
     assert image_capable["no_image_support"] is False
 
 
-def test_catalog_display_names_are_route_first(tmp_path):
+def test_catalog_display_names_keep_route_metadata_out_of_primary_label(tmp_path):
     payload = desktop_models_payload()
     settings = tmp_path / "models.json"
     settings.write_text(json.dumps(payload))
     models = ModelSettings(settings).load()
     rows = {model.slug: catalog_entry(model) for model in models}
 
-    assert rows["opencode-go-mimo-v2-5-pro"]["display_name"] == "CLIProxyAPI / OpenCode Go / MiMo v2.5 Pro"
+    assert rows["opencode-go-mimo-v2-5-pro"]["display_name"] == "MiMo v2.5 Pro"
+    assert rows["opencode-go-mimo-v2-5-pro"]["provider_display_name"] == "CLIProxyAPI / OpenCode Go"
     assert rows["opencode-go-mimo-v2-5-pro"]["input_modalities"] == ["text"]
-    assert rows["minimax-coding-minimax-m3"]["display_name"] == "CLIProxyAPI / MiniMax Coding / MiniMax M3"
+    assert rows["minimax-coding-minimax-m3"]["display_name"] == "MiniMax M3"
+    assert rows["minimax-coding-minimax-m3"]["provider_display_name"] == "CLIProxyAPI / MiniMax Coding"
     assert rows["minimax-coding-minimax-m3"]["input_modalities"] == ["text", "image"]
-    assert rows["commandcode-deepseek-v4-flash"]["display_name"] == "CLIProxyAPI / CommandCode / DeepSeek V4 Flash"
-    assert rows["grok-4-3"]["display_name"] == "CLIProxyAPI / xAI Grok OAuth / Grok 4.3"
+    assert rows["commandcode-deepseek-v4-flash"]["display_name"] == "DeepSeek V4 Flash"
+    assert rows["commandcode-deepseek-v4-flash"]["provider_display_name"] == "CLIProxyAPI / CommandCode"
+    assert rows["grok-4-3"]["display_name"] == "Grok 4.3"
+    assert rows["grok-4-3"]["provider_display_name"] == "CLIProxyAPI / xAI Grok OAuth"
     assert rows["grok-4-3"]["supports_reasoning_summaries"] is True
 
 
@@ -468,7 +484,8 @@ def test_write_catalog_keeps_configured_credential_rows_without_shell_secret(tmp
     write_catalog(models, catalog_path)
 
     rows = {row["slug"]: row for row in json.loads(catalog_path.read_text())["models"]}
-    assert rows["opencode-go-mimo-v2-5-pro"]["display_name"] == "CLIProxyAPI / OpenCode Go / MiMo v2.5 Pro"
+    assert rows["opencode-go-mimo-v2-5-pro"]["display_name"] == "MiMo v2.5 Pro"
+    assert rows["opencode-go-mimo-v2-5-pro"]["provider_display_name"] == "CLIProxyAPI / OpenCode Go"
     assert rows["opencode-go-mimo-v2-5-pro"]["input_modalities"] == ["text"]
     assert rows["minimax-coding-minimax-m3"]["input_modalities"] == ["text", "image"]
 

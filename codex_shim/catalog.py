@@ -36,10 +36,10 @@ def catalog_entry(model: ShimModel) -> dict:
     supports_reasoning = _raw_bool(model, "supports_reasoning", default=True)
     supports_tools = _raw_bool(model, "supports_tools", default=False)
     provider_label = _provider_label(model)
-    visual_name = _with_provider_prefix(model.display_name, provider_label)
     return {
         "slug": model.slug,
-        "display_name": visual_name,
+        "display_name": model.display_name,
+        "provider_display_name": provider_label,
         "description": f"{model.display_name} via {provider_label or 'local Codex shim'}.",
         "context_window": context,
         "max_context_window": context,
@@ -227,6 +227,12 @@ def _provider_label(model: ShimModel) -> str:
         or ""
     ).strip()
     if configured:
+        cli_prefix = "CLIProxyAPI / "
+        cursor_prefix = "Cursor "
+        if configured.startswith(cli_prefix + cursor_prefix):
+            return cli_prefix + configured.removeprefix(cli_prefix + cursor_prefix)
+        if configured.startswith(cursor_prefix):
+            return configured.removeprefix(cursor_prefix)
         return configured
 
     upstream = _upstream_provider_label(model.model)

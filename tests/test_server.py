@@ -811,6 +811,7 @@ def _picker_settings_file(tmp_path):
                     {
                         "model": "deepseek-v4-pro",
                         "displayName": "DeepSeek V4 Pro",
+                        "providerDisplayName": "CLIProxyAPI / CommandCode",
                         "provider": "openai",
                         "baseUrl": "http://example.invalid/v1",
                         "apiKey": "k",
@@ -905,6 +906,8 @@ async def test_api_models_lists_configured_models_with_active_flag(
         assert active == {"kimi-k26": False, "deepseek-v4-pro": True}
         deepseek = data[1]
         assert deepseek["model"] == "deepseek-v4-pro"
+        assert deepseek["display_name"] == "DeepSeek V4 Pro"
+        assert deepseek["provider_display_name"] == "CLIProxyAPI / CommandCode"
         assert deepseek["model_provider"] == "codex_shim"
         assert deepseek["owned_by"] == "codex_shim"
         assert "model_catalog_json" not in deepseek

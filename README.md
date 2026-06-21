@@ -48,8 +48,8 @@ and Codex-specific capability metadata.
 ## What This Fork Adds
 
 - CLIProxyAPI discovery with a deterministic bootstrap fallback.
-- Route-first Desktop display names, capabilities, context limits, and
-  compaction metadata.
+- Clean Desktop display names, route provenance metadata, capabilities,
+  context limits, and compaction metadata.
 - `GET /api/models`, `GET /v1/models`, `POST /v1/responses`,
   `POST /v1/responses/compact`, and `POST /v1/chat/completions`.
 - Streaming and non-streaming translation for OpenAI-chat and
@@ -90,6 +90,28 @@ snapshot.
 Generated runtime state lives in `${XDG_STATE_HOME:-~/.local/state}/codex-shim`
 by default. Set `CODEX_SHIM_RUNTIME_DIR` only when you intentionally want an
 alternate local state directory.
+
+### Desktop Display Names
+
+Desktop catalog rows keep the visible model label separate from route
+provenance:
+
+- `display_name` is the clean model name shown as the primary picker label.
+- `provider_display_name` carries route metadata such as
+  `CLIProxyAPI / CommandCode`.
+- `slug` remains route-stable, even when it contains a legacy `cursor-` route
+  prefix, because saved threads, compaction overrides, and CLIProxyAPI routing
+  depend on it.
+
+If a local route owner arrives as `cursor-nous-portal`, the shim keeps the
+stable slug but presents the provider as `CLIProxyAPI / Nous Portal` and the
+model as its own name, for example `Step 3.7 Flash:free`.
+
+OpenAI Codex also has an official `--oss` mode for direct local Ollama and LM
+Studio providers. That is separate from this CLIProxyAPI-backed Desktop
+custom-endpoint stack. See OpenAI's
+[OSS mode documentation](https://developers.openai.com/codex/config-advanced#oss-mode-local-providers)
+when you want the direct local-provider path.
 
 ### Context Windows And Compaction
 
@@ -200,6 +222,10 @@ tool with an executor.
 - Context windows and default compaction timing are generated into
   `models.json`. Regenerate after changing CLIProxyAPI metadata or global ratio
   settings; per-model `desktop compaction` overrides persist across regeneration.
+- If Desktop shows `CLIProxyAPI / Cursor ...` as the primary picker label,
+  update this repo, regenerate the Desktop catalog, restart the shim service,
+  and restart Desktop. Current builds reserve route provenance for
+  `provider_display_name`.
 - CLIProxyAPI discovery falls back to a static snapshot when unavailable. That
   keeps setup deterministic but may show routes that need regeneration.
 - Browser extension constraints such as invisible `target="_blank"` tabs,

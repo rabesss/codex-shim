@@ -226,6 +226,9 @@ tool with an executor.
   update this repo, regenerate the Desktop catalog, restart the shim service,
   and restart Desktop. Current builds reserve route provenance for
   `provider_display_name`.
+- Current companion Desktop builds also group the model submenu by
+  `provider_display_name`, so provider separation should be fixed by improving
+  catalog metadata rather than by prefixing `display_name`.
 - CLIProxyAPI discovery falls back to a static snapshot when unavailable. That
   keeps setup deterministic but may show routes that need regeneration.
 - Browser extension constraints such as invisible `target="_blank"` tabs,

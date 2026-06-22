@@ -222,6 +222,11 @@ The visible label contract is:
 Do not use `display_name` for local relay names, account names, credential
 hints, or other transient machine-specific details.
 
+Current companion Desktop builds group the model submenu by
+`provider_display_name` when multiple providers are present. If provider
+segregation looks wrong, fix the catalog metadata and regenerate the Desktop
+catalog; do not encode provider prefixes into `display_name`.
+
 The routing contract is:
 
 - official picker row: `model_provider=openai`, direct OpenAI/Codex route;

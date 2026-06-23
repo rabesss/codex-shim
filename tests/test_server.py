@@ -839,6 +839,37 @@ def _stub_codex_config(monkeypatch, tmp_path, *, model: str = "kimi-k26") -> "Pa
     return config
 
 
+def _duplicate_picker_settings_file(tmp_path):
+    settings = tmp_path / "settings.json"
+    settings.write_text(
+        json.dumps(
+            {
+                "customModels": [
+                    {
+                        "slug": "nous-step-flash-a",
+                        "model": "nous-a/step-3.7-flash-free",
+                        "displayName": "Step 3.7 Flash:free",
+                        "providerDisplayName": "Nous Portal",
+                        "provider": "openai",
+                        "baseUrl": "http://example.invalid/v1",
+                        "apiKey": "sk-secret-a",
+                    },
+                    {
+                        "slug": "nous-step-flash-b",
+                        "model": "nous-b/step-3.7-flash-free",
+                        "displayName": "Step 3.7 Flash:free",
+                        "providerDisplayName": "Nous Portal",
+                        "provider": "openai",
+                        "baseUrl": "http://example.invalid/v1",
+                        "apiKey": "sk-secret-b",
+                    },
+                ]
+            }
+        )
+    )
+    return settings
+
+
 def test_picker_html_renders_self_contained_page():
     html = _picker_html("test-token")
     assert html.startswith("<!DOCTYPE html>")
@@ -1006,33 +1037,7 @@ async def test_api_models_allows_desktop_loopback_origin_port(tmp_path, auth_mis
 
 
 async def test_api_models_dedupes_duplicate_picker_labels(tmp_path, auth_missing):
-    settings = tmp_path / "settings.json"
-    settings.write_text(
-        json.dumps(
-            {
-                "customModels": [
-                    {
-                        "slug": "nous-step-flash-a",
-                        "model": "nous-a/step-3.7-flash-free",
-                        "displayName": "Step 3.7 Flash:free",
-                        "providerDisplayName": "Nous Portal",
-                        "provider": "openai",
-                        "baseUrl": "http://example.invalid/v1",
-                        "apiKey": "sk-secret-a",
-                    },
-                    {
-                        "slug": "nous-step-flash-b",
-                        "model": "nous-b/step-3.7-flash-free",
-                        "displayName": "Step 3.7 Flash:free",
-                        "providerDisplayName": "Nous Portal",
-                        "provider": "openai",
-                        "baseUrl": "http://example.invalid/v1",
-                        "apiKey": "sk-secret-b",
-                    },
-                ]
-            }
-        )
-    )
+    settings = _duplicate_picker_settings_file(tmp_path)
     shim_client = TestClient(TestServer(ShimServer(settings).app()))
     await shim_client.start_server()
     try:
@@ -1048,6 +1053,27 @@ async def test_api_models_dedupes_duplicate_picker_labels(tmp_path, auth_missing
         serialized = json.dumps(data)
         assert "api_key" not in serialized.lower()
         assert "sk-" not in serialized.lower()
+    finally:
+        await shim_client.close()
+
+
+async def test_api_models_keeps_active_duplicate_picker_label(
+    monkeypatch, tmp_path, auth_missing
+):
+    settings = _duplicate_picker_settings_file(tmp_path)
+    _stub_codex_config(monkeypatch, tmp_path, model="nous-step-flash-b")
+    shim_client = TestClient(TestServer(ShimServer(settings).app()))
+    await shim_client.start_server()
+    try:
+        resp = await shim_client.get("/api/models")
+        assert resp.status == 200
+        data = await resp.json()
+        nous_rows = [
+            m for m in data if m["provider_display_name"] == "Nous Portal"
+        ]
+        assert len(nous_rows) == 1
+        assert nous_rows[0]["slug"] == "nous-step-flash-b"
+        assert nous_rows[0]["active"] is True
     finally:
         await shim_client.close()
 

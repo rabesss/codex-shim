@@ -2,7 +2,7 @@
 
 This guide connects
 [`rabesss/codex-shim`](https://github.com/rabesss/codex-shim) to
-[`rabesss/codex-desktop-linux`](https://github.com/rabesss/codex-desktop-linux).
+[`rabesss/codex-linux`](https://github.com/rabesss/codex-linux).
 The two repositories are designed as one custom-model stack with separate
 ownership boundaries.
 
@@ -325,7 +325,7 @@ Then verify through the installed Desktop UI:
 | Navigation is slow | Allow for the upstream site-status safety check before treating it as a hang. |
 
 Full Browser backend constraints are maintained in the companion
-[Browser Control guide](https://github.com/rabesss/codex-desktop-linux/blob/main/docs/browser-control.md#backend-constraints).
+[Browser Control guide](https://github.com/rabesss/codex-linux/blob/main/docs/browser-control.md#backend-constraints).
 
 ## Optional Commands
 

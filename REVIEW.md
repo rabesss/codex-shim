@@ -2,7 +2,7 @@
 
 Canonical PR review guide for this **Linux-focused fork** of
 [`sybil-solutions/codex-shim`](https://github.com/sybil-solutions/codex-shim). Companion Desktop
-integration lives in [`rabesss/codex-desktop-linux`](https://github.com/rabesss/codex-desktop-linux).
+integration lives in [`rabesss/codex-linux`](https://github.com/rabesss/codex-linux).
 
 This fork no longer tracks the upstream project's full review-bot fleet. Configure
 only the agents that actually review here:

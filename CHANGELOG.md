@@ -21,7 +21,7 @@ Current platform support and integration ownership are defined by the README.
   compaction set|list|clear`, including human-readable token counts and exact
   display-name selection across multiple provider routes.
 - Documented the maintained two-repository architecture with
-  `rabesss/codex-desktop-linux`, including setup, provider persistence,
+  `rabesss/codex-linux`, including setup, provider persistence,
   `/goal` fork behavior, validation, and remaining Browser backend constraints.
 - Added cross-repository contributor and issue-reporting guidance.
 

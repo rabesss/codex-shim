@@ -15,7 +15,7 @@ The supported Desktop integration is split between two repositories:
 
 | Repository | Responsibility |
 |---|---|
-| [`rabesss/codex-desktop-linux`](https://github.com/rabesss/codex-desktop-linux) | Builds Codex Desktop for Linux, merges custom rows into the picker, preserves custom provider state across start/fork/resume, and exposes Linux Browser tooling. |
+| [`rabesss/codex-linux`](https://github.com/rabesss/codex-linux) | Builds Codex Desktop for Linux, merges custom rows into the picker, preserves custom provider state across start/fork/resume, and exposes Linux Browser tooling. |
 | [`rabesss/codex-shim`](https://github.com/rabesss/codex-shim) | Discovers CLIProxyAPI models, serves catalog metadata, and translates Codex Responses, compaction, images, streaming, and tool calls. |
 
 Use current `main` from both repositories. Updating only one side can leave the
@@ -248,7 +248,7 @@ tool with an executor.
 - Browser extension constraints such as invisible `target="_blank"` tabs,
   stale locators, and the reduced Playwright API remain upstream limitations.
   See the companion
-  [Browser Control guide](https://github.com/rabesss/codex-desktop-linux/blob/main/docs/browser-control.md#backend-constraints).
+  [Browser Control guide](https://github.com/rabesss/codex-linux/blob/main/docs/browser-control.md#backend-constraints).
 - `codex-shim patch-app` and `restore-app` are retained for legacy overlay
   compatibility. The maintained integration is built by
   `codex-desktop-linux`; do not patch a package-owned app in place.

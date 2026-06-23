@@ -4,130 +4,73 @@ import json
 from pathlib import Path
 
 from . import router as router_module
+from .catalog_rows import (
+    catalog_entry,
+    chatgpt_passthrough_entries,
+    chatgpt_passthrough_entry,
+    shim_route_catalog_entry,
+    with_provider_prefix,
+)
 from .settings import (
-    CHATGPT_MODEL_SLUG,
     PROVIDER_NAME,
     ShimModel,
     available_model_slugs,
     chatgpt_passthrough_available,
     default_model_slug,
-    load_chatgpt_passthrough_catalog_models,
 )
 from .cursor_passthrough import cursor_catalog_entry, cursor_passthrough_available
 
 
-PLAN_TIERS = ["free", "plus", "pro", "team", "business", "enterprise"]
-UPSTREAM_PROVIDER_LABELS = {
-    "deepseek": "DeepSeek",
-    "minimaxai": "MiniMax",
-    "moonshotai": "Moonshot",
-    "qwen": "Qwen",
-    "stepfun": "StepFun",
-    "xiaomi": "Xiaomi",
-    "zai-org": "Z.ai",
-}
-
-
-def catalog_entry(model: ShimModel) -> dict:
-    context = model.max_context_limit or _default_context(model)
-    compact = model.auto_compact_token_limit or max(8_000, int(context * 0.8))
-    truncation = model.truncation_limit or min(64_000, max(8_000, int(context * 0.32)))
-    reasoning = _reasoning_effort(model)
-    supports_reasoning = _raw_bool(model, "supports_reasoning", default=True)
-    supports_tools = _raw_bool(model, "supports_tools", default=False)
-    provider_label = _provider_label(model)
-    return {
-        "slug": model.slug,
-        "display_name": model.display_name,
-        "provider_display_name": provider_label,
-        "description": f"{model.display_name} via {provider_label or 'local Codex shim'}.",
-        "context_window": context,
-        "max_context_window": context,
-        "auto_compact_token_limit": compact,
-        "truncation_policy": {"mode": "tokens", "limit": truncation},
-        "default_reasoning_level": reasoning,
-        "supported_reasoning_levels": [
-            {"effort": "low", "description": "Faster, lighter reasoning"},
-            {"effort": "medium", "description": "Balanced speed and reasoning"},
-            {"effort": "high", "description": "Deeper reasoning"},
-            {"effort": "xhigh", "description": "Maximum reasoning where supported"},
-        ],
-        "default_reasoning_summary": "auto" if supports_reasoning else "none",
-        "reasoning_summary_format": "experimental",
-        "supports_reasoning_summaries": supports_reasoning,
-        "default_verbosity": "low",
-        "support_verbosity": False,
-        "apply_patch_tool_type": "freeform",
-        "web_search_tool_type": "text_and_image",
-        "supports_search_tool": False,
-        "supports_parallel_tool_calls": supports_tools,
-        "experimental_supported_tools": [],
-        "input_modalities": ["text"] if model.no_image_support else ["text", "image"],
-        "supports_image_detail_original": not model.no_image_support,
-        "shell_type": "shell_command",
-        "visibility": "list",
-        "minimal_client_version": "0.0.1",
-        "supported_in_api": True,
-        "availability_nux": None,
-        "upgrade": None,
-        "priority": max(1, 1000 - model.index),
-        "prefer_websockets": False,
-        "available_in_plans": PLAN_TIERS,
-        "base_instructions": "You are a coding agent running in Codex through a local custom-model shim.",
-        "model_messages": {
-            "instructions_template": (
-                "You are Codex running on {model_name} through a local all-model shim. "
-                "Be a helpful, direct coding collaborator."
-            ),
-            "instructions_variables": {"model_name": model.display_name},
-        },
-    }
-
-
-def chatgpt_passthrough_entries() -> list[dict]:
-    """Catalog entries for GPT models routed through ChatGPT passthrough."""
-    entries: list[dict] = []
-    for raw in load_chatgpt_passthrough_catalog_models():
-        entry = dict(raw)
-        display_name = str(entry.get("display_name") or entry.get("slug") or "ChatGPT")
-        entry["display_name"] = _with_provider_prefix(display_name, "ChatGPT/OpenAI")
-        entry["visibility"] = "list"
-        entry.setdefault("available_in_plans", PLAN_TIERS)
-        entry.setdefault("minimal_client_version", "0.0.1")
-        entry.setdefault("supported_in_api", True)
-        if entry.get("slug") == CHATGPT_MODEL_SLUG:
-            entry["isDefault"] = True
-            entry["priority"] = max(int(entry.get("priority") or 0), 10000)
-        entries.append(entry)
-    return entries
-
-
-def chatgpt_passthrough_entry() -> dict:
-    """Catalog entry for the default GPT-5.5 ChatGPT passthrough model."""
-    for entry in chatgpt_passthrough_entries():
-        if entry.get("slug") == CHATGPT_MODEL_SLUG:
-            return entry
-    return chatgpt_passthrough_entries()[0]
+__all__ = [
+    "catalog_entry",
+    "chatgpt_passthrough_entries",
+    "chatgpt_passthrough_entry",
+    "codex_config_overrides",
+    "write_catalog",
+    "write_config",
+]
 
 
 def write_catalog(models: list[ShimModel], path: Path, router_config=None) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
     entries: list[dict] = []
     if router_config is not None and router_module.router_is_active(router_config, available_model_slugs(models)):
-        entries.append(router_module.router_catalog_entry(router_config))
+        entries.append(
+            shim_route_catalog_entry(
+                router_module.router_catalog_entry(router_config),
+                provider="auto",
+                provider_display_name="Codex Shim Router",
+                source="codex-shim",
+            )
+        )
     if chatgpt_passthrough_available():
-        entries.extend(chatgpt_passthrough_entries())
+        entries.extend(
+            shim_route_catalog_entry(
+                entry,
+                provider="chatgpt",
+                provider_display_name="ChatGPT/OpenAI",
+                source="ChatGPT passthrough",
+            )
+            for entry in chatgpt_passthrough_entries()
+        )
     if cursor_passthrough_available():
         entry = cursor_catalog_entry()
-        entry["display_name"] = _with_provider_prefix(str(entry.get("display_name") or "Composer 2.5"), "Cursor")
+        entry["display_name"] = with_provider_prefix(str(entry.get("display_name") or "Composer 2.5"), "Cursor")
         entry["isDefault"] = not chatgpt_passthrough_available()
-        entries.append(entry)
+        entries.append(
+            shim_route_catalog_entry(
+                entry,
+                provider="cursor",
+                provider_display_name="Cursor",
+                source="Cursor subscription",
+            )
+        )
     # Catalog generation can run from a normal shell while provider credentials
     # are only available to codex-shim.service through LoadCredentialEncrypted.
     # Keep configured routes visible in Desktop; request-time routing still
     # enforces credential availability and reports clear missing-key errors.
     entries.extend(catalog_entry(model) for model in models)
-    payload = {"models": entries}
+    payload = {"version": 1, "models": entries}
     path.write_text(json.dumps(payload, indent=2, sort_keys=False) + "\n")
     return path
 
@@ -169,85 +112,6 @@ def codex_config_overrides(catalog_path: Path, default_slug: str, port: int) -> 
         f'model_providers.{PROVIDER_NAME}.stream_max_retries=3',
         f'model_providers.{PROVIDER_NAME}.stream_idle_timeout_ms=600000',
     ]
-
-
-def _default_context(model: ShimModel) -> int:
-    lower = f"{model.model} {model.display_name}".lower()
-    if "claude" in lower:
-        return 200_000
-    if "gpt-5" in lower:
-        return 400_000
-    if "gemini" in lower:
-        return 1_000_000
-    return 128_000
-
-
-def _reasoning_effort(model: ShimModel) -> str:
-    if not _raw_bool(model, "supports_reasoning", default=True):
-        return "low"
-    lower = model.display_name.lower()
-    if "xhigh" in lower or "x-high" in lower:
-        return "xhigh"
-    if "high" in lower:
-        return "high"
-    if "medium" in lower:
-        return "medium"
-    if "low" in lower:
-        return "low"
-    return "medium"
-
-
-def _raw_bool(model: ShimModel, key: str, *, default: bool) -> bool:
-    value = model.raw.get(key)
-    if value is None:
-        camel = key.split("_")[0] + "".join(part[:1].upper() + part[1:] for part in key.split("_")[1:])
-        value = model.raw.get(camel)
-    if isinstance(value, bool):
-        return value
-    if isinstance(value, str):
-        return value.strip().lower() in {"1", "true", "yes", "on"}
-    return default
-
-
-def _with_provider_prefix(display_name: str, provider_label: str) -> str:
-    if not provider_label:
-        return display_name
-    prefix = f"{provider_label} / "
-    if display_name.startswith(prefix):
-        return display_name
-    return f"{provider_label} / {display_name}"
-
-
-def _provider_label(model: ShimModel) -> str:
-    configured = str(
-        model.raw.get("provider_display_name")
-        or model.raw.get("providerDisplayName")
-        or model.raw.get("provider_label")
-        or model.raw.get("providerLabel")
-        or ""
-    ).strip()
-    if configured:
-        cli_prefix = "CLIProxyAPI / "
-        cursor_prefix = "Cursor "
-        if configured.startswith(cli_prefix + cursor_prefix):
-            return cli_prefix + configured.removeprefix(cli_prefix + cursor_prefix)
-        if configured.startswith(cursor_prefix):
-            return configured.removeprefix(cursor_prefix)
-        return configured
-
-    upstream = _upstream_provider_label(model.model)
-    if "127.0.0.1:8317" in model.base_url:
-        return f"CLIProxyAPI/{upstream}" if upstream else "CLIProxyAPI"
-    if upstream:
-        return upstream
-    if model.provider == "generic-chat-completion-api":
-        return "OpenAI-compatible"
-    return model.provider
-
-
-def _upstream_provider_label(model_name: str) -> str:
-    owner = model_name.split("/", 1)[0].strip().lower()
-    return UPSTREAM_PROVIDER_LABELS.get(owner, owner)
 
 
 def _toml_escape(value: str) -> str:

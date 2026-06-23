@@ -96,8 +96,11 @@ def test_catalog_preserves_context_and_visibility():
     model = ModelSettingsFixture.one()
     entry = catalog_entry(model)
     assert entry["slug"] == "claude-opus"
+    assert entry["model"] == "claude-opus"
+    assert entry["model_provider"] == "codex_shim"
     assert entry["visibility"] == "list"
     assert entry["context_window"] == 200000
+    assert entry["source"] == "codex-shim"
     assert "free" in entry["available_in_plans"]
 
 
@@ -483,10 +486,18 @@ def test_write_catalog_keeps_configured_credential_rows_without_shell_secret(tmp
 
     write_catalog(models, catalog_path)
 
-    rows = {row["slug"]: row for row in json.loads(catalog_path.read_text())["models"]}
+    data = json.loads(catalog_path.read_text())
+    assert data["version"] == 1
+    rows = {row["slug"]: row for row in data["models"]}
     assert rows["opencode-go-mimo-v2-5-pro"]["display_name"] == "MiMo v2.5 Pro"
+    assert rows["opencode-go-mimo-v2-5-pro"]["model"] == "mimo-v2.5-pro"
+    assert rows["opencode-go-mimo-v2-5-pro"]["model_provider"] == "codex_shim"
+    assert rows["opencode-go-mimo-v2-5-pro"]["source"] == "CLIProxyAPI"
     assert rows["opencode-go-mimo-v2-5-pro"]["provider_display_name"] == "CLIProxyAPI / OpenCode Go"
     assert rows["opencode-go-mimo-v2-5-pro"]["input_modalities"] == ["text"]
+    assert rows["opencode-go-mimo-v2-5-pro"]["supports_tools"] is True
+    assert rows["opencode-go-mimo-v2-5-pro"]["supports_reasoning"] is False
+    assert rows["opencode-go-mimo-v2-5-pro"]["supports_streaming"] is True
     assert rows["minimax-coding-minimax-m3"]["input_modalities"] == ["text", "image"]
 
 
@@ -619,7 +630,7 @@ def test_write_catalog_omits_gpt55_when_auth_missing(tmp_path, auth_missing):
     catalog_path = tmp_path / "catalog.json"
     write_catalog([], catalog_path)
     data = json.loads(catalog_path.read_text())
-    assert data == {"models": []}
+    assert data == {"version": 1, "models": []}
 
 
 def test_write_catalog_includes_gpt_models_when_auth_present(tmp_path, auth_present, monkeypatch):
@@ -629,6 +640,31 @@ def test_write_catalog_includes_gpt_models_when_auth_present(tmp_path, auth_pres
     write_catalog([], catalog_path)
     data = json.loads(catalog_path.read_text())
     assert [model["slug"] for model in data["models"]] == list(FALLBACK_CHATGPT_PASSTHROUGH_SLUGS)
+    row = data["models"][0]
+    assert row["model"] == row["slug"]
+    assert row["model_provider"] == "codex_shim"
+    assert row["provider"] == "chatgpt"
+    assert row["provider_display_name"] == "ChatGPT/OpenAI"
+    assert row["source"] == "ChatGPT passthrough"
+    assert row["supports_tools"] is True
+    assert row["supports_streaming"] is True
+
+
+def test_write_catalog_normalizes_cursor_passthrough_for_shared_schema(tmp_path, auth_missing, monkeypatch):
+    monkeypatch.setattr("codex_shim.catalog.cursor_passthrough_available", lambda: True)
+    catalog_path = tmp_path / "catalog.json"
+
+    write_catalog([], catalog_path)
+
+    rows = {model["slug"]: model for model in json.loads(catalog_path.read_text())["models"]}
+    cursor = rows["composer-2-5"]
+    assert cursor["model"] == "composer-2-5"
+    assert cursor["model_provider"] == "codex_shim"
+    assert cursor["provider"] == "cursor"
+    assert cursor["provider_display_name"] == "Cursor"
+    assert cursor["source"] == "Cursor subscription"
+    assert cursor["supports_tools"] is True
+    assert cursor["supports_streaming"] is True
 
 
 def test_managed_config_uses_linux_catalog_path(monkeypatch):

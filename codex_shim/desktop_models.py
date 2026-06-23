@@ -42,6 +42,7 @@ TOOL_CAPABLE_OWNERS = {
 }
 
 BOOTSTRAP_MODELS: tuple[tuple[str, str], ...] = (
+    ("zai-coding", "glm-5.2"),
     ("zai-coding", "glm-5.1"),
     ("zai-coding", "glm-5"),
     ("zai-coding", "glm-4.7"),
@@ -180,6 +181,36 @@ def write_desktop_models(
     )
     _write_json(path, payload)
     return path
+
+
+def refresh_desktop_models(
+    path: Path,
+    *,
+    include_commandcode: bool = True,
+    include_cpa_oauth: bool = True,
+    overrides_path: Path | None = None,
+) -> tuple[Path, bool, int]:
+    """Refresh a Desktop model matrix only when live discovery is available.
+
+    Unlike ``write_desktop_models``, this does not replace an existing settings
+    file with the built-in bootstrap matrix when CLIProxyAPI discovery is
+    unavailable. That makes it safe as a systemd ``ExecStartPre`` command.
+    """
+
+    path = Path(path).expanduser()
+    discovered = discover_cliproxyapi_models()
+    if not discovered:
+        return path, False, 0
+    path.parent.mkdir(parents=True, exist_ok=True)
+    overrides = load_desktop_model_overrides(overrides_path or desktop_overrides_path(path))
+    payload = desktop_models_payload(
+        include_commandcode=include_commandcode,
+        include_cpa_oauth=include_cpa_oauth,
+        cliproxyapi_models=discovered,
+        model_overrides=overrides,
+    )
+    _write_json(path, payload)
+    return path, True, len(payload["models"])
 
 
 def desktop_overrides_path(settings_path: Path) -> Path:

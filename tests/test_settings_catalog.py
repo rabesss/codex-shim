@@ -12,6 +12,7 @@ from codex_shim.desktop_models import (
     desktop_models_payload,
     desktop_overrides_path,
     discover_cliproxyapi_models,
+    refresh_desktop_models,
     update_desktop_compaction_override,
     write_desktop_models,
 )
@@ -171,6 +172,9 @@ def test_desktop_model_matrix_uses_credentials_and_provider_prefixes(tmp_path):
     rows = {row["slug"]: row for row in payload["models"]}
 
     assert "opencode-go-deepseek-v4-pro" in rows
+    assert rows["zai-coding-glm-5-2"]["max_context_limit"] == 1000000
+    assert rows["zai-coding-glm-5-2"]["max_output_tokens"] == 131072
+    assert rows["zai-coding-glm-5-2"]["supports_reasoning"] is True
     assert rows["opencode-go-deepseek-v4-pro"]["api_key_credential"] == "CLIPROXY_INTERNAL_API_KEY"
     assert rows["opencode-go-deepseek-v4-pro"]["provider_display_name"] == "CLIProxyAPI / OpenCode Go"
     assert rows["opencode-go-deepseek-v4-pro"]["base_url"] == "http://127.0.0.1:8317/v1"
@@ -339,6 +343,34 @@ def test_desktop_compaction_override_persists_across_catalog_regeneration(monkey
     assert row["truncation_limit"] == 48_000
     overrides = json.loads(desktop_overrides_path(settings).read_text())
     assert overrides["models"]["cursor-zai-coding-glm-5-2"]["auto_compact_token_limit"] == 165_000
+
+
+def test_refresh_desktop_models_keeps_existing_file_without_discovery(monkeypatch, tmp_path):
+    settings = tmp_path / "models.json"
+    existing = {"models": [{"slug": "existing-model", "model": "existing-model"}]}
+    settings.write_text(json.dumps(existing))
+    monkeypatch.setattr("codex_shim.desktop_models.discover_cliproxyapi_models", lambda: [])
+
+    output, refreshed, count = refresh_desktop_models(settings)
+
+    assert output == settings
+    assert refreshed is False
+    assert count == 0
+    assert json.loads(settings.read_text()) == existing
+
+
+def test_refresh_desktop_models_writes_live_discovery(monkeypatch, tmp_path):
+    settings = tmp_path / "models.json"
+    discovered = [{"id": "glm-5.2", "owned_by": "zai-coding"}]
+    monkeypatch.setattr("codex_shim.desktop_models.discover_cliproxyapi_models", lambda: discovered)
+
+    output, refreshed, count = refresh_desktop_models(settings)
+    rows = {row["slug"]: row for row in json.loads(settings.read_text())["models"]}
+
+    assert output == settings
+    assert refreshed is True
+    assert count == 1
+    assert rows["zai-coding-glm-5-2"]["max_context_limit"] == 1000000
 
 
 def test_desktop_compaction_override_requires_all_for_duplicate_upstream_model_ids(tmp_path):

@@ -78,15 +78,19 @@ codex-shim doctor
 The installer creates an isolated venv, `~/.local/bin/codex-shim`, a generated
 model matrix, and a credential-neutral `codex-shim.service`. It never writes
 provider keys. Add encrypted systemd credentials or another protected
-credential source separately, then regenerate the matrix after provider
-changes so catalog rows do not become stale.
+credential source separately. The generated service runs
+`desktop refresh-models` before startup; when a discovery credential is
+available, that refreshes the matrix from live CLIProxyAPI discovery, and when
+discovery is unavailable it leaves the existing matrix unchanged.
 
 Use `scripts/install-user.sh --no-service` when another supervisor owns the
 process. For development, use `python3 -m venv .venv` followed by
 `python3 -m pip install -e ".[dev]"` instead.
 
 Without a discovery credential, `desktop write-models` uses a built-in model
-snapshot.
+snapshot. Use `desktop refresh-models` for ongoing provider updates because it
+does not replace an existing matrix with the snapshot when live discovery is
+temporarily unavailable.
 Generated runtime state lives in `${XDG_STATE_HOME:-~/.local/state}/codex-shim`
 by default. Set `CODEX_SHIM_RUNTIME_DIR` only when you intentionally want an
 alternate local state directory.
@@ -126,8 +130,8 @@ route discovery.
 ### Context Windows And Compaction
 
 Codex Desktop reads context-window and compaction thresholds from the shim's
-catalog response. When `desktop write-models` can reach CLIProxyAPI, the shim
-preserves model metadata such as `contextWindow`, `maxTokens`,
+catalog response. When `desktop write-models` or `desktop refresh-models` can
+reach CLIProxyAPI, the shim preserves model metadata such as `contextWindow`, `maxTokens`,
 `autoCompactTokenLimit`, `truncationLimit`, tool support, image support, and
 reasoning support. Those live fields take precedence over built-in fallbacks.
 

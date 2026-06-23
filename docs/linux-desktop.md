@@ -63,6 +63,9 @@ This installs an isolated user venv, a launcher under `~/.local/bin`, the
 initial model matrix, and a systemd user service. The generated unit is
 credential-neutral. Add any required `LoadCredentialEncrypted=` entries in a
 systemd drop-in; do not add plaintext provider keys to the unit or repository.
+The generated unit runs `desktop refresh-models` before startup. With a
+discovery credential, that updates the matrix from live CLIProxyAPI discovery;
+without discovery, it leaves the existing matrix unchanged.
 
 Use `scripts/install-user.sh --no-service` if another supervisor will run the
 server. Contributors can use an editable development venv instead.
@@ -77,6 +80,12 @@ codex-shim desktop write-models --output ~/.codex-shim/models.json
 The command writes credential names and route metadata, not secret values. If
 the discovery credential is absent or CLIProxyAPI cannot be reached, it writes
 the built-in bootstrap matrix instead. Regenerate after provider changes.
+For unattended startup refreshes, use `desktop refresh-models` instead; it only
+rewrites the matrix when live discovery returns rows:
+
+```bash
+codex-shim desktop refresh-models --output ~/.codex-shim/models.json
+```
 
 The same generated file controls the context footer and compaction timing in
 Desktop. Live CLIProxyAPI fields such as `contextWindow`, `maxTokens`,
@@ -311,6 +320,7 @@ Then verify through the installed Desktop UI:
 |---|---|
 | Custom rows are absent | Verify `custom-model-catalog` was enabled and `/api/models` is reachable. |
 | Shim reports no usable models | Regenerate `models.json` with the discovery credential available and verify request-time credentials. |
+| Desktop shows stale CLIProxyAPI models | Run `codex-shim desktop refresh-models --output ~/.codex-shim/models.json` in the credentialed service context, restart `codex-shim.service`, then restart Desktop so the merged catalog is rebuilt. |
 | Desktop shows `CLIProxyAPI / Cursor ...` as the main model label | Update codex-shim, rerun `desktop write-models`, restart `codex-shim.service`, then restart Desktop so primary labels come from clean `display_name` values. |
 | Desktop shows the same model twice under one provider | Update codex-shim, regenerate `models.json`, and inspect `/api/models` for duplicate visible provider/model pairs. Current builds collapse duplicate `provider_display_name` plus `display_name` rows before Desktop renders them. |
 | Desktop groups custom rows under the wrong provider | Fix `provider_display_name` or keep the generated description in the `<display_name> via <provider_display_name>.` shape, then restart Desktop so the selector reloads the catalog. |

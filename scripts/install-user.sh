@@ -105,6 +105,7 @@ Environment=PYTHONUNBUFFERED=1
 Environment=NO_PROXY=127.0.0.1,localhost,::1
 Environment=no_proxy=127.0.0.1,localhost,::1
 Environment="CODEX_SHIM_RUNTIME_DIR=$RUNTIME_DIR"
+ExecStartPre="$VENV/bin/codex-shim" --settings "$SETTINGS" desktop refresh-models --output "$SETTINGS"
 ExecStart="$VENV/bin/python" -m codex_shim.server --settings "$SETTINGS" --host 127.0.0.1 --port 8765
 Restart=on-failure
 RestartSec=2

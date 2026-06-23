@@ -40,6 +40,7 @@ from .settings import (
 from .desktop_models import (
     desktop_overrides_path,
     load_desktop_model_overrides,
+    refresh_desktop_models,
     update_desktop_compaction_override,
     write_desktop_models,
 )
@@ -146,6 +147,13 @@ def main(argv: list[str] | None = None) -> int:
     desktop_write.add_argument("--output", type=Path, default=DEFAULT_SETTINGS)
     desktop_write.add_argument("--no-commandcode", action="store_true", help="Omit CLIProxyAPI CommandCode routes.")
     desktop_write.add_argument("--no-cpa-oauth", action="store_true", help="Omit CLIProxyAPI OAuth-only routes such as Grok CLI.")
+    desktop_refresh = desktop_sub.add_parser(
+        "refresh-models",
+        help="Refresh Desktop models from live CLIProxyAPI discovery without falling back to the bootstrap snapshot.",
+    )
+    desktop_refresh.add_argument("--output", type=Path, default=DEFAULT_SETTINGS)
+    desktop_refresh.add_argument("--no-commandcode", action="store_true", help="Omit CLIProxyAPI CommandCode routes.")
+    desktop_refresh.add_argument("--no-cpa-oauth", action="store_true", help="Omit CLIProxyAPI OAuth-only routes such as Grok CLI.")
     compaction_parser = desktop_sub.add_parser(
         "compaction",
         help="Persist per-model Desktop compaction and truncation thresholds.",
@@ -217,6 +225,17 @@ def main(argv: list[str] | None = None) -> int:
             include_cpa_oauth=not args.no_cpa_oauth,
         )
         print(f"Wrote desktop model matrix to {output}")
+        return 0
+    if args.command == "desktop" and args.desktop_command == "refresh-models":
+        output, refreshed, count = refresh_desktop_models(
+            args.output,
+            include_commandcode=not args.no_commandcode,
+            include_cpa_oauth=not args.no_cpa_oauth,
+        )
+        if refreshed:
+            print(f"Refreshed desktop model matrix at {output} from {count} live CLIProxyAPI rows")
+        else:
+            print(f"No live CLIProxyAPI discovery rows; left desktop model matrix unchanged at {output}")
         return 0
     if args.command == "desktop" and args.desktop_command == "compaction":
         overrides_path = desktop_overrides_path(args.settings)

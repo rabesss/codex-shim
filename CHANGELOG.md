@@ -21,7 +21,7 @@ Current platform support and integration ownership are defined by the README.
   compaction set|list|clear`, including human-readable token counts and exact
   display-name selection across multiple provider routes.
 - Documented the maintained two-repository architecture with
-  `rabesss/codex-desktop-control`, including setup, provider persistence,
+  `rabesss/codex-desktop-linux`, including setup, provider persistence,
   `/goal` fork behavior, validation, and remaining Browser backend constraints.
 - Added cross-repository contributor and issue-reporting guidance.
 
@@ -92,7 +92,7 @@ Current platform support and integration ownership are defined by the README.
 ### Changed
 
 - The supported Desktop path is now the package/build integration in
-  `codex-desktop-control`; shim `patch-app` and `restore-app` are documented as
+  `codex-desktop-linux`; shim `patch-app` and `restore-app` are documented as
   legacy overlay compatibility commands.
 - CLIProxyAPI discovery now preserves live model metadata instead of reducing
   rows to `id` and `owned_by`. Context windows, output limits, compact
@@ -114,6 +114,14 @@ Current platform support and integration ownership are defined by the README.
 
 ### Fixed
 
+- `/api/models` now de-duplicates Desktop-visible rows by
+  `provider_display_name` plus `display_name`, preventing duplicate selector
+  entries when multiple route-stable slugs collapse to the same clean provider
+  and model label.
+- Desktop catalog CORS guidance now reflects the loopback webview boundary:
+  browser callers get CORS headers only for valid loopback HTTP origins with
+  an explicit port, while direct loopback CLI requests remain available without
+  widening browser access.
 - Desktop catalog rows now keep route provenance out of the primary
   `display_name`. The main picker label uses the clean model name, while
   `provider_display_name` carries `CLIProxyAPI / ...` metadata and

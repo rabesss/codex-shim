@@ -2,13 +2,13 @@
 
 This guide connects
 [`rabesss/codex-shim`](https://github.com/rabesss/codex-shim) to
-[`rabesss/codex-desktop-control`](https://github.com/rabesss/codex-desktop-control).
+[`rabesss/codex-desktop-linux`](https://github.com/rabesss/codex-desktop-linux).
 The two repositories are designed as one custom-model stack with separate
 ownership boundaries.
 
 ## Responsibilities
 
-`codex-desktop-control` owns:
+`codex-desktop-linux` owns:
 
 - the Linux Desktop package and app bundle patches;
 - custom rows in the model picker;
@@ -38,14 +38,17 @@ OpenAI Codex also supports `--oss` for direct local Ollama and LM Studio
 providers. That is a separate local-provider mode, not a replacement for this
 CLIProxyAPI-backed custom Desktop package path. See OpenAI's
 [OSS mode documentation](https://developers.openai.com/codex/config-advanced#oss-mode-local-providers)
-for the direct local-provider flow.
+for the direct local-provider flow. Moving away from this shim requires a
+Desktop-compatible provider/catalog path with equivalent metadata; the current
+documented `--oss` mode is local-provider oriented and does not discover
+remote CLIProxyAPI routes on its own.
 
 ## Prerequisites
 
 - Python 3.11 or newer.
 - CLIProxyAPI available on its configured loopback endpoint.
 - A non-plaintext credential source for CLIProxyAPI discovery and requests.
-- A `codex-desktop-control` build with `custom-model-catalog` enabled.
+- A `codex-desktop-linux` build with `custom-model-catalog` enabled.
 
 ## Install The Shim
 
@@ -139,7 +142,16 @@ history.
 
 ## Build Desktop
 
-In the companion Desktop checkout, enable the feature:
+In the companion Desktop checkout, use the public custom-model profile:
+
+```bash
+make install-custom-models
+```
+
+That profile enables `open-target-discovery`, `codex-wrapper-updater`, and
+`custom-model-catalog` without adding workstation-specific browser overrides.
+
+Advanced users can instead enable the feature manually:
 
 ```json
 {
@@ -208,8 +220,8 @@ curl -s http://127.0.0.1:8765/api/models
 The Desktop catalog response should contain model and capability metadata but
 no fields named like API keys, bearer tokens, authorization headers, or secret
 values. It also omits the local generated-catalog path. Browser CORS access is
-limited to the installed Desktop webview origins on port `5175`; direct
-loopback CLI requests remain available without browser CORS headers.
+limited to valid loopback HTTP origins with an explicit port; direct loopback
+CLI requests remain available without browser CORS headers.
 
 The visible label contract is:
 
@@ -221,6 +233,12 @@ The visible label contract is:
 
 Do not use `display_name` for local relay names, account names, credential
 hints, or other transient machine-specific details.
+
+The Desktop-facing catalog should contain at most one visible row for a
+matching `provider_display_name` plus `display_name`. The shim de-duplicates
+that visible pair before returning `/api/models`; route distinctions that need
+to survive for saved threads, overrides, or CLIProxyAPI routing belong in the
+slug and row metadata.
 
 Current companion Desktop builds group the model submenu by
 `provider_display_name` when multiple providers are present. If provider
@@ -272,7 +290,7 @@ Run repository tests first:
 python3 -m pytest -q
 python3 -m compileall -q codex_shim
 
-# codex-desktop-control
+# codex-desktop-linux
 node --test linux-features/custom-model-catalog/test.js
 scripts/workstation/verify-policy.sh
 scripts/workstation/verify-custom-model-mcp-routing.sh codex-app
@@ -294,10 +312,12 @@ Then verify through the installed Desktop UI:
 | Custom rows are absent | Verify `custom-model-catalog` was enabled and `/api/models` is reachable. |
 | Shim reports no usable models | Regenerate `models.json` with the discovery credential available and verify request-time credentials. |
 | Desktop shows `CLIProxyAPI / Cursor ...` as the main model label | Update codex-shim, rerun `desktop write-models`, restart `codex-shim.service`, then restart Desktop so primary labels come from clean `display_name` values. |
+| Desktop shows the same model twice under one provider | Update codex-shim, regenerate `models.json`, and inspect `/api/models` for duplicate visible provider/model pairs. Current builds collapse duplicate `provider_display_name` plus `display_name` rows before Desktop renders them. |
+| Desktop groups custom rows under the wrong provider | Fix `provider_display_name` or keep the generated description in the `<display_name> via <provider_display_name>.` shape, then restart Desktop so the selector reloads the catalog. |
 | Context footer shows the wrong model limit | Update codex-shim, rerun `desktop write-models` with the discovery credential available, restart the service, then inspect `/api/models` and the generated catalog for the new limits. |
 | Desktop compacts too early or too late | Use `codex-shim desktop compaction set <slug-or-display-name> <tokens>`, restart the service, and verify with `desktop compaction list`. |
 | Custom thread fails only after restart | Restore the durable non-default `[model_providers.codex_shim]` block. |
-| `/goal` child no longer reaches the shim | Rebuild `codex-desktop-control` from current `main`; old fork payloads dropped provider state. |
+| `/goal` child no longer reaches the shim | Rebuild `codex-desktop-linux` from current `main`; old fork payloads dropped provider state. |
 | Browser tool is visible but returns `unsupported call` | Update both repos, confirm the row has `supports_tools: true`, and inspect returned `type`, `namespace`, and `name` fields. |
 | Tool-heavy request routes to a cheap model that cannot call tools | Add `supports_tools` to router candidates and regenerate the catalog; missing values are treated conservatively. |
 | CommandCode rows return `Unsupported model provider: commandcode` | Regenerate `models.json`; current shim also normalizes stale CommandCode rows to local CLIProxyAPI. |
@@ -305,7 +325,7 @@ Then verify through the installed Desktop UI:
 | Navigation is slow | Allow for the upstream site-status safety check before treating it as a hang. |
 
 Full Browser backend constraints are maintained in the companion
-[Browser Control guide](https://github.com/rabesss/codex-desktop-control/blob/main/docs/browser-control.md#backend-constraints).
+[Browser Control guide](https://github.com/rabesss/codex-desktop-linux/blob/main/docs/browser-control.md#backend-constraints).
 
 ## Optional Commands
 

@@ -961,6 +961,97 @@ async def test_api_models_rejects_untrusted_browser_origin(tmp_path, auth_missin
         await shim_client.close()
 
 
+async def test_api_models_rejects_malformed_loopback_origins(tmp_path, auth_missing):
+    settings = _picker_settings_file(tmp_path)
+    shim_client = TestClient(TestServer(ShimServer(settings).app()))
+    await shim_client.start_server()
+    try:
+        for origin in [
+            "http://127.0.0.1",
+            "http://localhost",
+            "http://127.0.0.1:34567/path",
+            "http://127.0.0.1:34567?query=1",
+            "http://user@127.0.0.1:34567",
+            "http://127.0.0.1:99999",
+            "null",
+        ]:
+            resp = await shim_client.options(
+                "/api/models",
+                headers={
+                    "Origin": origin,
+                    "Access-Control-Request-Method": "GET",
+                    "Access-Control-Request-Private-Network": "true",
+                },
+            )
+            assert resp.status == 204
+            assert "Access-Control-Allow-Origin" not in resp.headers
+            assert "Access-Control-Allow-Private-Network" not in resp.headers
+    finally:
+        await shim_client.close()
+
+
+async def test_api_models_allows_desktop_loopback_origin_port(tmp_path, auth_missing):
+    settings = _picker_settings_file(tmp_path)
+    shim_client = TestClient(TestServer(ShimServer(settings).app()))
+    await shim_client.start_server()
+    try:
+        resp = await shim_client.get(
+            "/api/models", headers={"Origin": "http://127.0.0.1:34567"}
+        )
+        assert resp.status == 200
+        assert resp.headers["Access-Control-Allow-Origin"] == "http://127.0.0.1:34567"
+        assert resp.headers["Access-Control-Allow-Private-Network"] == "true"
+    finally:
+        await shim_client.close()
+
+
+async def test_api_models_dedupes_duplicate_picker_labels(tmp_path, auth_missing):
+    settings = tmp_path / "settings.json"
+    settings.write_text(
+        json.dumps(
+            {
+                "customModels": [
+                    {
+                        "slug": "nous-step-flash-a",
+                        "model": "nous-a/step-3.7-flash-free",
+                        "displayName": "Step 3.7 Flash:free",
+                        "providerDisplayName": "Nous Portal",
+                        "provider": "openai",
+                        "baseUrl": "http://example.invalid/v1",
+                        "apiKey": "sk-secret-a",
+                    },
+                    {
+                        "slug": "nous-step-flash-b",
+                        "model": "nous-b/step-3.7-flash-free",
+                        "displayName": "Step 3.7 Flash:free",
+                        "providerDisplayName": "Nous Portal",
+                        "provider": "openai",
+                        "baseUrl": "http://example.invalid/v1",
+                        "apiKey": "sk-secret-b",
+                    },
+                ]
+            }
+        )
+    )
+    shim_client = TestClient(TestServer(ShimServer(settings).app()))
+    await shim_client.start_server()
+    try:
+        resp = await shim_client.get("/api/models")
+        assert resp.status == 200
+        data = await resp.json()
+        picker_keys = [
+            (m["provider_display_name"], m["display_name"])
+            for m in data
+            if m["provider_display_name"] == "Nous Portal"
+        ]
+        assert picker_keys == [("Nous Portal", "Step 3.7 Flash:free")]
+        serialized = json.dumps(data)
+        assert "api_key" not in serialized.lower()
+        assert "sk-" not in serialized.lower()
+    finally:
+        await shim_client.close()
+
+
 def test_request_body_dumps_are_disabled_by_default(monkeypatch, tmp_path):
     monkeypatch.setattr(server_module, "DEBUG_DIR", tmp_path)
     monkeypatch.delenv("CODEX_SHIM_DEBUG_DUMP_REQUESTS", raising=False)

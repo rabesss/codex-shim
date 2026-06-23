@@ -3,7 +3,7 @@
 This repository is a Linux-focused fork of
 [`sybil-solutions/codex-shim`](https://github.com/sybil-solutions/codex-shim) and the companion
 adapter for
-[`rabesss/codex-desktop-control`](https://github.com/rabesss/codex-desktop-control).
+[`rabesss/codex-desktop-linux`](https://github.com/rabesss/codex-desktop-linux).
 
 ## Ownership Boundary
 

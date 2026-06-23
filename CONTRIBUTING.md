@@ -26,7 +26,7 @@ CI runs the same commands on Python 3.11 and 3.12 via
   Anthropic-shaped upstream). Add a test that exercises the new shape end
   to end through `ShimServer`, the way `test_server.py` does.
 - Compatibility fixes for the companion
-  [`codex-desktop-control`](https://github.com/rabesss/codex-desktop-control)
+  [`codex-desktop-linux`](https://github.com/rabesss/codex-desktop-linux)
   integration when they belong at the catalog or wire-protocol boundary.
 - Documentation backed by a specific Desktop, Codex CLI, and shim version.
   Picker, thread lifecycle, Browser exposure, and package patches belong in the
@@ -46,7 +46,7 @@ CI runs the same commands on Python 3.11 and 3.12 via
 
 Please include:
 
-- Codex CLI version (`codex --version`) and `codex-desktop-control`
+- Codex CLI version (`codex --version`) and `codex-desktop-linux`
   package/source commit.
 - Linux distribution, desktop environment/window manager, and whether the
   app is launched from a native package, development build, or wrapper.

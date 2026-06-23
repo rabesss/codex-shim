@@ -15,7 +15,7 @@ The supported Desktop integration is split between two repositories:
 
 | Repository | Responsibility |
 |---|---|
-| [`rabesss/codex-desktop-control`](https://github.com/rabesss/codex-desktop-control) | Builds Codex Desktop for Linux, merges custom rows into the picker, preserves custom provider state across start/fork/resume, and exposes Linux Browser tooling. |
+| [`rabesss/codex-desktop-linux`](https://github.com/rabesss/codex-desktop-linux) | Builds Codex Desktop for Linux, merges custom rows into the picker, preserves custom provider state across start/fork/resume, and exposes Linux Browser tooling. |
 | [`rabesss/codex-shim`](https://github.com/rabesss/codex-shim) | Discovers CLIProxyAPI models, serves catalog metadata, and translates Codex Responses, compaction, images, streaming, and tool calls. |
 
 Use current `main` from both repositories. Updating only one side can leave the
@@ -107,11 +107,21 @@ If a local route owner arrives as `cursor-nous-portal`, the shim keeps the
 stable slug but presents the provider as `CLIProxyAPI / Nous Portal` and the
 model as its own name, for example `Step 3.7 Flash:free`.
 
+The Desktop-facing catalog should expose one visible row for each
+`provider_display_name` plus `display_name` pair. If multiple route-stable
+slugs collapse to the same clean provider/model label, the shim keeps the
+first visible row and preserves routing distinctions in the slug and metadata.
+Duplicate-looking selector rows are therefore catalog freshness issues, not a
+reason to change the global Codex `model_provider` away from `openai`.
+
 OpenAI Codex also has an official `--oss` mode for direct local Ollama and LM
 Studio providers. That is separate from this CLIProxyAPI-backed Desktop
 custom-endpoint stack. See OpenAI's
 [OSS mode documentation](https://developers.openai.com/codex/config-advanced#oss-mode-local-providers)
-when you want the direct local-provider path.
+when you want the direct local-provider path. Replacing this shim with the
+official path requires an equivalent way to provide Desktop catalog metadata;
+`--oss` by itself is documented for local providers, not remote CLIProxyAPI
+route discovery.
 
 ### Context Windows And Compaction
 
@@ -226,6 +236,10 @@ tool with an executor.
   update this repo, regenerate the Desktop catalog, restart the shim service,
   and restart Desktop. Current builds reserve route provenance for
   `provider_display_name`.
+- If Desktop shows the same model twice under one provider, update this repo
+  and inspect `/api/models` for duplicate `provider_display_name` plus
+  `display_name` pairs. Current builds de-duplicate those visible rows before
+  Desktop merges the selector catalog.
 - Current companion Desktop builds also group the model submenu by
   `provider_display_name`, so provider separation should be fixed by improving
   catalog metadata rather than by prefixing `display_name`.
@@ -234,10 +248,10 @@ tool with an executor.
 - Browser extension constraints such as invisible `target="_blank"` tabs,
   stale locators, and the reduced Playwright API remain upstream limitations.
   See the companion
-  [Browser Control guide](https://github.com/rabesss/codex-desktop-control/blob/main/docs/browser-control.md#backend-constraints).
+  [Browser Control guide](https://github.com/rabesss/codex-desktop-linux/blob/main/docs/browser-control.md#backend-constraints).
 - `codex-shim patch-app` and `restore-app` are retained for legacy overlay
   compatibility. The maintained integration is built by
-  `codex-desktop-control`; do not patch a package-owned app in place.
+  `codex-desktop-linux`; do not patch a package-owned app in place.
 
 ## Documentation
 

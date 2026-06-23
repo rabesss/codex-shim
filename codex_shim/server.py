@@ -9,7 +9,7 @@ import sys
 import time
 from pathlib import Path
 from typing import Any, Final
-from urllib.parse import urljoin
+from urllib.parse import urljoin, urlsplit
 
 from aiohttp import ClientSession, ClientTimeout, web
 
@@ -71,8 +71,8 @@ API_MODELS_CORS_ALLOW_HEADERS = (
     "accept, authorization, content-type, x-requested-with, "
     "access-control-request-private-network"
 )
-API_MODELS_ALLOWED_ORIGINS: Final[frozenset[str]] = frozenset(
-    {"http://127.0.0.1:5175", "http://localhost:5175"}
+API_MODELS_ALLOWED_LOOPBACK_HOSTS: Final[frozenset[str]] = frozenset(
+    {"127.0.0.1", "::1", "localhost"}
 )
 REQUEST_DUMP_ENV: Final[str] = "CODEX_SHIM_DEBUG_DUMP_REQUESTS"
 
@@ -87,7 +87,29 @@ def _api_models_cors_headers(request: web.Request) -> dict[str, str]:
         ),
     }
     origin = request.headers.get("Origin")
-    if origin in API_MODELS_ALLOWED_ORIGINS:
+    parsed_origin = None
+    if origin:
+        try:
+            parsed_origin = urlsplit(origin)
+        except ValueError:
+            parsed_origin = None
+    origin_port = None
+    if parsed_origin is not None:
+        try:
+            origin_port = parsed_origin.port
+        except ValueError:
+            origin_port = None
+    if (
+        parsed_origin is not None
+        and parsed_origin.scheme == "http"
+        and parsed_origin.hostname in API_MODELS_ALLOWED_LOOPBACK_HOSTS
+        and origin_port is not None
+        and parsed_origin.username is None
+        and parsed_origin.password is None
+        and parsed_origin.path == ""
+        and parsed_origin.query == ""
+        and parsed_origin.fragment == ""
+    ):
         headers["Access-Control-Allow-Origin"] = origin
         headers["Access-Control-Allow-Private-Network"] = "true"
     return headers
@@ -157,7 +179,20 @@ class ShimServer:
             ))
         for m in usable_byok_models(self.settings.load()):
             data.append(_api_model_entry(m, active=current == m.slug))
-        return web.json_response(data, headers=_api_models_cors_headers(request))
+        deduped: list[dict[str, Any]] = []
+        picker_keys: dict[tuple[str, str], int] = {}
+        for row in data:
+            key = (
+                str(row.get("provider_display_name") or ""),
+                str(row.get("display_name") or ""),
+            )
+            existing_index = picker_keys.get(key)
+            if existing_index is None:
+                picker_keys[key] = len(deduped)
+                deduped.append(row)
+            elif row.get("active") and not deduped[existing_index].get("active"):
+                deduped[existing_index] = row
+        return web.json_response(deduped, headers=_api_models_cors_headers(request))
 
     async def switch_model(self, request: web.Request) -> web.Response:
         if not secrets.compare_digest(request.headers.get("X-Codex-Shim-Picker-Token", ""), self.picker_token):

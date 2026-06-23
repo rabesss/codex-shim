@@ -2,7 +2,7 @@
 
 Canonical PR review guide for this **Linux-focused fork** of
 [`sybil-solutions/codex-shim`](https://github.com/sybil-solutions/codex-shim). Companion Desktop
-integration lives in [`rabesss/codex-desktop-control`](https://github.com/rabesss/codex-desktop-control).
+integration lives in [`rabesss/codex-desktop-linux`](https://github.com/rabesss/codex-desktop-linux).
 
 This fork no longer tracks the upstream project's full review-bot fleet. Configure
 only the agents that actually review here:
@@ -27,7 +27,7 @@ only the agents that actually review here:
 - **Discovery vs bootstrap:** live CLIProxyAPI discovery is source of truth; bootstrap rows are
   fallback metadata only (no remote endpoints beyond the local aggregator).
 - **Ownership boundary:** Desktop picker, ASAR patches, Browser feature exposure, packaging, and
-  installed-app verification belong in `codex-desktop-control`, not here.
+  installed-app verification belong in `codex-desktop-linux`, not here.
 
 ## Severity calibration
 
@@ -43,5 +43,5 @@ only the agents that actually review here:
 - Run `python3 -m pytest -q` and `python3 -m compileall -q codex_shim` for code changes.
 - For catalog/matrix changes: `codex-shim desktop write-models`, `generate`, and `list` — inspect
   for duplicate slugs, unsupported capabilities, and secret-shaped fields before publishing.
-- For Desktop integration changes, coordinate with `codex-desktop-control` tests and installed
+- For Desktop integration changes, coordinate with `codex-desktop-linux` tests and installed
   routing verification.

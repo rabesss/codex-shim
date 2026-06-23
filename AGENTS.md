@@ -8,7 +8,7 @@ rows to CLIProxyAPI. The PR review charter is in [`REVIEW.md`](REVIEW.md).
 
 `codex-shim` exposes a loopback Codex-compatible Responses API and model catalog, then translates
 requests to CLIProxyAPI-backed OpenAI-chat or Anthropic-compatible routes. Desktop picker/session
-behavior lives in the companion repo [`rabesss/codex-desktop-control`](https://github.com/rabesss/codex-desktop-control).
+behavior lives in the companion repo [`rabesss/codex-desktop-linux`](https://github.com/rabesss/codex-desktop-linux).
 
 ## Architecture
 
@@ -25,7 +25,7 @@ behavior lives in the companion repo [`rabesss/codex-desktop-control`](https://g
 - Keep official OpenAI models on direct routing; custom rows use the shim only.
 - Preserve loopback/Host-header security checks.
 - Add or update tests under `tests/` for translation, streaming, and tool-call behavior changes.
-- Keep fork-specific Desktop integration out of this repo — stage it in `codex-desktop-control`.
+- Keep fork-specific Desktop integration out of this repo — stage it in `codex-desktop-linux`.
 
 ## Review guidelines
 

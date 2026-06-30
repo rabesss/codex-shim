@@ -9,7 +9,7 @@ description = "Codex Responses and CLIProxyAPI bridge for Codex Desktop on Linux
 readme = "README.md"
 requires-python = ">=3.11"
 license = { file = "LICENSE" }
-authors = [{ name = "0xSero" }]
+authors = [{ name = "rabesss" }]
 keywords = ["codex", "byok", "openai", "anthropic", "responses-api", "model-routing"]
 classifiers = [
   "Development Status :: 3 - Alpha",

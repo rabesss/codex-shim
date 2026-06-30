@@ -218,6 +218,13 @@ Model rows may use these sources:
 CLIProxyAPI-generated rows use `api_key_credential` for the internal
 CLIProxyAPI key. Provider-specific keys remain in CLIProxyAPI.
 
+Do not encode workstation-specific public relay keys, local tunnel hostnames,
+or local credential names into the generated Desktop matrix. If one machine
+needs to target a restricted local relay directly, keep that as a private
+Desktop catalog source or local service override that uses the generic
+credential indirections above. The public shim generator should continue to
+describe the route, not the operator's local secret layout.
+
 ## Catalog And Routing Checks
 
 ```bash

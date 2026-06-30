@@ -429,6 +429,7 @@ def _cliproxyapi_rows(
 ) -> list[dict[str, Any]]:
     generated: list[dict[str, Any]] = []
     seen_slugs: set[str] = set()
+    seen_picker_rows: set[tuple[str, str]] = set()
     for index, row in enumerate(rows):
         model_id = str(row.get("id") or row.get("model") or "").strip()
         owner = str(row.get("owned_by") or row.get("owner") or "cliproxyapi").strip() or "cliproxyapi"
@@ -439,6 +440,10 @@ def _cliproxyapi_rows(
         ):
             continue
         generated_row = _row_from_cliproxyapi(owner=owner, model_id=model_id, index=index, raw=row)
+        picker_key = _picker_dedupe_key(generated_row)
+        if picker_key in seen_picker_rows:
+            continue
+        seen_picker_rows.add(picker_key)
         slug = generated_row["slug"]
         if slug in seen_slugs:
             slug = f"{slug}-{index}"
@@ -446,6 +451,13 @@ def _cliproxyapi_rows(
         seen_slugs.add(slug)
         generated.append(generated_row)
     return generated
+
+
+def _picker_dedupe_key(row: dict[str, Any]) -> tuple[str, str]:
+    return (
+        str(row.get("provider_display_name") or "").strip().casefold(),
+        str(row.get("display_name") or "").strip().casefold(),
+    )
 
 
 def _include_owner(owner: str, *, include_commandcode: bool, include_cpa_oauth: bool) -> bool:

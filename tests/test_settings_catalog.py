@@ -300,7 +300,7 @@ def test_desktop_model_matrix_uses_current_long_context_fallbacks():
     assert rows["cursor-zai-coding-glm-5-2"]["max_output_tokens"] == 131072
     assert rows["cursor-zai-coding-glm-5-2"]["auto_compact_token_limit"] == 820_000
     assert rows["cursor-zai-coding-glm-5-2"]["truncation_limit"] == 128_000
-    assert rows["cursor-zai-coding-glm-5-2-1"]["max_context_limit"] == 1000000
+    assert "cursor-zai-coding-glm-5-2-1" not in rows
     assert rows["cursor-minimax-coding-minimax-m3"]["max_context_limit"] == 1000000
     assert rows["cursor-minimax-coding-minimax-m3"]["no_image_support"] is False
     assert rows["commandcode-minimax-m3"]["max_context_limit"] == 1000000

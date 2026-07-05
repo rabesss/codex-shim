@@ -45,3 +45,8 @@ only the agents that actually review here:
   for duplicate slugs, unsupported capabilities, and secret-shaped fields before publishing.
 - For Desktop integration changes, coordinate with `codex-desktop-linux` tests and installed
   routing verification.
+
+## Agent-Maintained Review Memory
+Agents that open or update PRs in this repository must keep this section current when review history shows a repeated pattern. Add dated bullets only for durable repo-specific lessons, not one-off PR commentary.
+
+- No recurring repo-specific review patterns have been recorded yet.

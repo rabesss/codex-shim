@@ -261,6 +261,9 @@ tool with an executor.
 
 - [`docs/linux-desktop.md`](docs/linux-desktop.md): integrated setup, routing,
   credentials, validation, and troubleshooting.
+- [`docs/CLIPROXYAPI_ACCEPTANCE.md`](docs/CLIPROXYAPI_ACCEPTANCE.md):
+  acceptance plan for maintained `Desktop -> codex_shim -> CLIProxyAPI`
+  custom rows.
 - [`docs/AUTO_ROUTER.md`](docs/AUTO_ROUTER.md): optional task classifier and
   route selection.
 - [`docs/FORK.md`](docs/FORK.md): fork ownership, upstream sync, and release

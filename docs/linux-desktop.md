@@ -299,6 +299,10 @@ fallback.
 
 ## Validation
 
+For the detailed acceptance matrix for CLIProxyAPI-backed custom rows through
+the maintained shim path, see
+[`CLIPROXYAPI_ACCEPTANCE.md`](CLIPROXYAPI_ACCEPTANCE.md).
+
 Run repository tests first:
 
 ```bash

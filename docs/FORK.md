@@ -92,5 +92,7 @@ tests and installed routing verifier.
 - [`../README.md`](../README.md): public architecture, setup, and limitations.
 - [`linux-desktop.md`](linux-desktop.md): integrated Desktop setup and smoke
   tests.
+- [`CLIPROXYAPI_ACCEPTANCE.md`](CLIPROXYAPI_ACCEPTANCE.md): acceptance plan for
+  maintained CLIProxyAPI-backed custom rows through `codex-shim`.
 - [`AUTO_ROUTER.md`](AUTO_ROUTER.md): optional classifier/router behavior.
 - [`../CONTRIBUTING.md`](../CONTRIBUTING.md): contributor workflow and reports.
